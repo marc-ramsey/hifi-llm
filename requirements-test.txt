@@ -1,0 +1,4 @@
+# Test dependencies (run: pip install -r requirements-test.txt)
+pytest>=8.0
+pytest-timeout>=2.3
+requests>=2.31
