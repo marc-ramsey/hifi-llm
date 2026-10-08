@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1")
 
 
+
+
+
 def _resolve_model_config(model_name: str):
     """Look up a model entry by name. Raises HTTPException if not found."""
     for model in get().models:
@@ -87,6 +90,17 @@ async def list_models():
 
 # ── POST /v1/chat/completions ───────────────────────────────────────────────
 
+def _normalize_delta(delta: dict) -> dict:
+    """No-op — pass deltas through unchanged.
+
+    Open WebUI handles reasoning_content via its structured output (Path 2),
+    showing thinking in a collapsible section and content in the main area.
+    We used to fold reasoning → content but that mixed thinking into the
+    response text. Leave deltas as the backend sends them.
+    """
+    return delta
+
+
 async def _stream_handler(request: Request) -> StreamingResponse:
     """Handle /v1/chat/completions with streaming (SSE) to the client."""
     body = await request.json()
@@ -103,7 +117,11 @@ async def _stream_handler(request: Request) -> StreamingResponse:
     )
 
     async def chunk_iterator() -> AsyncIterator[str]:
-        """Yield SSE-formatted chunks from the backend response."""
+        """Yield SSE-formatted chunks from the backend response.
+
+        Parses each SSE line, normalizes deltas (reasoning_content → content
+        for Open WebUI compatibility), then re-wraps as SSE data lines.
+        """
         buffer = b""
         async for chunk_bytes in stream:
             buffer += chunk_bytes
@@ -115,13 +133,33 @@ async def _stream_handler(request: Request) -> StreamingResponse:
                     if data == "[DONE]":
                         yield "data: [DONE]\n\n"
                         return
-                    yield f"data: {data}\n\n"
+                    try:
+                        parsed = json.loads(data)
+                        # Normalize reasoning_content → content
+                        choices = parsed.get("choices", [])
+                        for choice in choices:
+                            delta = choice.get("delta")
+                            if delta and isinstance(delta, dict):
+                                choice["delta"] = _normalize_delta(delta)
+                        yield f"data: {json.dumps(parsed, ensure_ascii=False)}\n\n"
+                    except json.JSONDecodeError:
+                        # Pass through non-JSON data lines as-is
+                        yield f"data: {data}\n\n"
                 elif line_str.startswith("data:"):
                     data = line_str[5:].lstrip()
                     if data == "[DONE]":
                         yield "data: [DONE]\n\n"
                         return
-                    yield f"data: {data}\n\n"
+                    try:
+                        parsed = json.loads(data)
+                        choices = parsed.get("choices", [])
+                        for choice in choices:
+                            delta = choice.get("delta")
+                            if delta and isinstance(delta, dict):
+                                choice["delta"] = _normalize_delta(delta)
+                        yield f"data: {json.dumps(parsed, ensure_ascii=False)}\n\n"
+                    except json.JSONDecodeError:
+                        yield f"data: {data}\n\n"
 
     return StreamingResponse(
         chunk_iterator(),
@@ -207,6 +245,7 @@ async def _completions_stream_handler(request: Request) -> StreamingResponse:
     )
 
     async def chunk_iterator() -> AsyncIterator[str]:
+        """Yield SSE-formatted chunks with reasoning_content → content normalization."""
         buffer = b""
         async for chunk_bytes in stream:
             buffer += chunk_bytes
@@ -218,13 +257,31 @@ async def _completions_stream_handler(request: Request) -> StreamingResponse:
                     if data == "[DONE]":
                         yield "data: [DONE]\n\n"
                         return
-                    yield f"data: {data}\n\n"
+                    try:
+                        parsed = json.loads(data)
+                        choices = parsed.get("choices", [])
+                        for choice in choices:
+                            delta = choice.get("delta")
+                            if delta and isinstance(delta, dict):
+                                choice["delta"] = _normalize_delta(delta)
+                        yield f"data: {json.dumps(parsed, ensure_ascii=False)}\n\n"
+                    except json.JSONDecodeError:
+                        yield f"data: {data}\n\n"
                 elif line_str.startswith("data:"):
                     data = line_str[5:].lstrip()
                     if data == "[DONE]":
                         yield "data: [DONE]\n\n"
                         return
-                    yield f"data: {data}\n\n"
+                    try:
+                        parsed = json.loads(data)
+                        choices = parsed.get("choices", [])
+                        for choice in choices:
+                            delta = choice.get("delta")
+                            if delta and isinstance(delta, dict):
+                                choice["delta"] = _normalize_delta(delta)
+                        yield f"data: {json.dumps(parsed, ensure_ascii=False)}\n\n"
+                    except json.JSONDecodeError:
+                        yield f"data: {data}\n\n"
 
     return StreamingResponse(
         chunk_iterator(),
