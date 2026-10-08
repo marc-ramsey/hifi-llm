@@ -73,7 +73,7 @@ def proxy(proxy_config_dir, tmp_path_factory):
     env["LLM_PROXY_TIMEOUT_MS"] = "60000"
 
     proc = subprocess.Popen(
-        [sys.executable, str(ROOT / "main.py"), str(config_path)],
+        [sys.executable, str(ROOT / "main.py"), "--config", str(config_path)],
         cwd=str(ROOT),
         env=env,
         stdout=subprocess.PIPE,

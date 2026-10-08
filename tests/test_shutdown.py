@@ -68,7 +68,7 @@ plugins_dir: null
         env["LLM_PROXY_TIMEOUT_MS"] = "60000"
 
         proc = subprocess.Popen(
-            [sys.executable, str(ROOT / "main.py"), config_path],
+            [sys.executable, str(ROOT / "main.py"), "--config", config_path],
             cwd=str(ROOT),
             env=env,
             stdout=subprocess.PIPE,

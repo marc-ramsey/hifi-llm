@@ -12,7 +12,7 @@ from pathlib import Path
 import uvicorn
 
 from config import ProxyConfig, get, set
-from config.loader import load_config
+from config.loader import load_config, resolve_config_path
 from proxy.app import create_app
 
 logging.basicConfig(
@@ -80,7 +80,8 @@ def run(config_path: str | None = None) -> None:
     port = listen_cfg.port
 
     logger.info("Starting server on %s:%d", host, port)
-    logger.info("Config file: %s", config_path or "proxy-config.yaml")
+    resolved = resolve_config_path(config_path)
+    logger.info("Config file: %s", resolved)
 
     # Start server
     server_config = uvicorn.Config(
@@ -104,5 +105,8 @@ def run(config_path: str | None = None) -> None:
 
 
 if __name__ == "__main__":
-    config_path = sys.argv[1] if len(sys.argv) > 1 else None
-    run(config_path)
+    import argparse
+    parser = argparse.ArgumentParser(description="Simple LLM Proxy")
+    parser.add_argument("--config", "-c", default=None, help="Path to config file")
+    args = parser.parse_args()
+    run(args.config)
