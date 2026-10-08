@@ -1,6 +1,3 @@
-# Simple LLM Proxy — Example Configuration
-# Backend: Arkestra on localhost:8080
-
 listen:
   host: 0.0.0.0
   port: 8081
@@ -9,22 +6,18 @@ auth:
   api_key: null
 
 models:
-  - name: "gemma-4-26B-instruct"
-    url: "http://127.0.0.1:8080"
+  - name: "fast-agent"
+    url: "http://mothership.local:8081"
     default_params:
       temperature: 0.7
       top_p: 0.95
       max_tokens: 256
 
-  - name: "qwen3.6-35B-instruct"
-    url: "http://127.0.0.1:8080"
+  - name: "slow-thinker"
+    url: "http://mothership.local:8082"
     default_params:
       temperature: 0.7
       top_p: 0.9
       max_tokens: 256
-
-  - name: "nomic-embed"
-    url: "http://127.0.0.1:8080"
-    default_params: {}
 
 plugins_dir: null
