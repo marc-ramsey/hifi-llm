@@ -1,6 +1,6 @@
 # LLM-Proxy E2E Tests
 
-All tests are **live-endpoint** tests — they run the proxy as a real subprocess and send real HTTP requests to Arkestra (on `:8080`).
+All tests run the proxy as a real subprocess backed by a **real threaded HTTP server** (a lightweight OpenAI-compatible mock server) — no external services required.
 
 ## Running
 
@@ -26,5 +26,4 @@ python3 -m pytest tests/test_shutdown.py -v
 
 ## Requirements
 
-- Arkestra running at `http://127.0.0.1:8080` with `gemma-4-26B-instruct` loaded
-- Embedding tests are skipped if `nomic-embed` is not loaded in Arkestra
+- None — the test backend starts automatically as a threaded HTTP server fixture.

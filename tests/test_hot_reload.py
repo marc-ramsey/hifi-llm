@@ -6,17 +6,14 @@ without dropping existing requests.
 
 from __future__ import annotations
 
-import os
 import signal
 import time
 
 import requests
 
-from .conftest import ARKESTRA_URL, DEFAULT_CONFIG
-
 
 class TestHotReload:
-    def test_sighup_adds_new_model(self, proxy, write_config, tmp_path):
+    def test_sighup_adds_new_model(self, proxy, write_config, tmp_path, backend_url):
         """After SIGHUP, new models from the updated config should appear."""
         port, proc = proxy
 
@@ -39,21 +36,21 @@ auth:
 
 models:
   - name: "gemma-4-26B-instruct"
-    url: "{ARKESTRA_URL}"
+    url: "{backend_url}"
     default_params:
       temperature: 0.7
       top_p: 0.95
       max_tokens: 256
 
   - name: "qwen3.6-35B-instruct"
-    url: "{ARKESTRA_URL}"
+    url: "{backend_url}"
     default_params:
       temperature: 0.7
       top_p: 0.9
       max_tokens: 256
 
   - name: "added-via-sighup"
-    url: "{ARKESTRA_URL}"
+    url: "{backend_url}"
     default_params: {{}}
 
 plugins_dir: null

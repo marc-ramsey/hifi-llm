@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, HTTPException, Request
@@ -36,25 +35,6 @@ def _resolve_model_config(model_name: str):
     )
 
 
-def _backend_error_handler(func):
-    """Decorator that converts BackendError to OpenAI-style 502 responses."""
-    async def wrapper(request: Request):
-        try:
-            return await func(request)
-        except BackendError as e:
-            logger.warning("Backend error on %s: %s", request.url.path, e.message)
-            return JSONResponse(
-                status_code=502,
-                content={
-                    "error": {
-                        "message": e.message,
-                        "type": "backend_error",
-                        "param": None,
-                        "code": e.status_code,
-                    },
-                },
-            )
-    return wrapper
 
 
 def _merge_defaults(payload: dict, defaults: dict) -> dict:
@@ -64,28 +44,6 @@ def _merge_defaults(payload: dict, defaults: dict) -> dict:
     merged = {**defaults, **payload}
     return merged
 
-
-# ── GET /v1/models ──────────────────────────────────────────────────────────
-
-@router.get("/models")
-async def list_models():
-    """Return the list of configured models in OpenAI format."""
-    models = get().models
-    return {
-        "object": "list",
-        "data": [
-            {
-                "id": m.name,
-                "object": "model",
-                "created": 0,
-                "owned_by": m.backend,
-            }
-            for m in models
-        ],
-    }
-
-
-# ── POST /v1/chat/completions ───────────────────────────────────────────────
 
 def _normalize_delta(delta: dict) -> dict:
     """No-op — pass deltas through unchanged.
@@ -98,18 +56,23 @@ def _normalize_delta(delta: dict) -> dict:
     return delta
 
 
-async def _stream_handler(request: Request) -> StreamingResponse:
-    """Handle /v1/chat/completions with streaming (SSE) to the client."""
+async def _resolve_and_merge(request: Request):
+    """Resolve model config and merge defaults. Returns (model_config, payload)."""
     body = await request.json()
     model_name = body.get("model", "")
-
     model_config = _resolve_model_config(model_name)
     payload = _merge_defaults(body, model_config.default_params)
+    return model_config, payload
+
+
+async def _forward_stream(request: Request, endpoint: str) -> StreamingResponse:
+    """Generic SSE streaming proxy for any endpoint."""
+    model_config, payload = await _resolve_and_merge(request)
 
     adapter = OpenAICompatibleAdapter()
     stream = adapter.forward_stream(
         url=model_config.url,
-        endpoint="/v1/chat/completions",
+        endpoint=endpoint,
         payload=payload,
     )
 
@@ -123,20 +86,6 @@ async def _stream_handler(request: Request) -> StreamingResponse:
                 line_str = line.decode("utf-8").strip()
                 if line_str.startswith("data: "):
                     data = line_str[6:]
-                    if data == "[DONE]":
-                        yield "data: [DONE]\n\n"
-                        return
-                    try:
-                        parsed = json.loads(data)
-                        for choice in parsed.get("choices", []):
-                            delta = choice.get("delta")
-                            if delta and isinstance(delta, dict):
-                                choice["delta"] = _normalize_delta(delta)
-                        yield f"data: {json.dumps(parsed, ensure_ascii=False)}\n\n"
-                    except json.JSONDecodeError:
-                        yield f"data: {data}\n\n"
-                elif line_str.startswith("data:"):
-                    data = line_str[5:].lstrip()
                     if data == "[DONE]":
                         yield "data: [DONE]\n\n"
                         return
@@ -161,24 +110,40 @@ async def _stream_handler(request: Request) -> StreamingResponse:
     )
 
 
-@_backend_error_handler
-async def _json_handler(request: Request) -> JSONResponse:
-    """Handle /v1/chat/completions returning a full JSON response."""
-    body = await request.json()
-    model_name = body.get("model", "")
-
-    model_config = _resolve_model_config(model_name)
-    payload = _merge_defaults(body, model_config.default_params)
+async def _forward_json(request: Request, endpoint: str) -> JSONResponse:
+    """Generic JSON proxy for any endpoint."""
+    model_config, payload = await _resolve_and_merge(request)
 
     adapter = OpenAICompatibleAdapter()
     response = await adapter.forward_json(
         url=model_config.url,
-        endpoint="/v1/chat/completions",
+        endpoint=endpoint,
         payload=payload,
     )
-
     return JSONResponse(content=response)
 
+
+# ── GET /v1/models ──────────────────────────────────────────────────────────
+
+@router.get("/models")
+async def list_models():
+    """Return the list of configured models in OpenAI format."""
+    models = get().models
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": m.name,
+                "object": "model",
+                "created": 0,
+                "owned_by": m.backend,
+            }
+            for m in models
+        ],
+    }
+
+
+# ── POST /v1/chat/completions ───────────────────────────────────────────────
 
 @router.post("/chat/completions")
 async def chat_completions(request: Request):
@@ -189,116 +154,20 @@ async def chat_completions(request: Request):
     """
     body = await request.json()
     if body.get("stream", False):
-        return await _stream_handler(request)
+        return await _forward_stream(request, "/v1/chat/completions")
     else:
-        return await _json_handler(request)
+        return await _forward_json(request, "/v1/chat/completions")
 
 
 # ── POST /v1/embeddings ─────────────────────────────────────────────────────
 
-@_backend_error_handler
 @router.post("/embeddings")
 async def embeddings(request: Request):
     """Proxy /v1/embeddings to the backend."""
-    body = await request.json()
-    model_name = body.get("model", "")
-
-    model_config = _resolve_model_config(model_name)
-    payload = _merge_defaults(body, model_config.default_params)
-
-    adapter = OpenAICompatibleAdapter()
-    response = await adapter.forward_json(
-        url=model_config.url,
-        endpoint="/v1/embeddings",
-        payload=payload,
-    )
-
-    return JSONResponse(content=response)
+    return await _forward_json(request, "/v1/embeddings")
 
 
 # ── POST /v1/completions (legacy) ───────────────────────────────────────────
-
-async def _completions_stream_handler(request: Request) -> StreamingResponse:
-    """Handle /v1/completions with streaming."""
-    body = await request.json()
-    model_name = body.get("model", "")
-
-    model_config = _resolve_model_config(model_name)
-    payload = _merge_defaults(body, model_config.default_params)
-
-    adapter = OpenAICompatibleAdapter()
-    stream = adapter.forward_stream(
-        url=model_config.url,
-        endpoint="/v1/completions",
-        payload=payload,
-    )
-
-    async def chunk_iterator() -> AsyncIterator[str]:
-        """Yield SSE-formatted chunks from the backend response."""
-        buffer = b""
-        async for chunk_bytes in stream:
-            buffer += chunk_bytes
-            while b"\n" in buffer:
-                line, buffer = buffer.split(b"\n", 1)
-                line_str = line.decode("utf-8").strip()
-                if line_str.startswith("data: "):
-                    data = line_str[6:]
-                    if data == "[DONE]":
-                        yield "data: [DONE]\n\n"
-                        return
-                    try:
-                        parsed = json.loads(data)
-                        for choice in parsed.get("choices", []):
-                            delta = choice.get("delta")
-                            if delta and isinstance(delta, dict):
-                                choice["delta"] = _normalize_delta(delta)
-                        yield f"data: {json.dumps(parsed, ensure_ascii=False)}\n\n"
-                    except json.JSONDecodeError:
-                        yield f"data: {data}\n\n"
-                elif line_str.startswith("data:"):
-                    data = line_str[5:].lstrip()
-                    if data == "[DONE]":
-                        yield "data: [DONE]\n\n"
-                        return
-                    try:
-                        parsed = json.loads(data)
-                        for choice in parsed.get("choices", []):
-                            delta = choice.get("delta")
-                            if delta and isinstance(delta, dict):
-                                choice["delta"] = _normalize_delta(delta)
-                        yield f"data: {json.dumps(parsed, ensure_ascii=False)}\n\n"
-                    except json.JSONDecodeError:
-                        yield f"data: {data}\n\n"
-
-    return StreamingResponse(
-        chunk_iterator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-@_backend_error_handler
-async def _completions_json_handler(request: Request) -> JSONResponse:
-    """Handle /v1/completions returning a full JSON response."""
-    body = await request.json()
-    model_name = body.get("model", "")
-
-    model_config = _resolve_model_config(model_name)
-    payload = _merge_defaults(body, model_config.default_params)
-
-    adapter = OpenAICompatibleAdapter()
-    response = await adapter.forward_json(
-        url=model_config.url,
-        endpoint="/v1/completions",
-        payload=payload,
-    )
-
-    return JSONResponse(content=response)
-
 
 @router.post("/completions")
 async def completions(request: Request):
@@ -309,9 +178,9 @@ async def completions(request: Request):
     """
     body = await request.json()
     if body.get("stream", False):
-        return await _completions_stream_handler(request)
+        return await _forward_stream(request, "/v1/completions")
     else:
-        return await _completions_json_handler(request)
+        return await _forward_json(request, "/v1/completions")
 
 
 

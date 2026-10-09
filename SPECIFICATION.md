@@ -18,7 +18,7 @@ Key goals
 | **Plug‑in architecture** | Optional modules can register extra routes, intercept requests/responses, add caching, tool‑calling, or expose custom agents. |
 | **Stateless & horizontally scalable** | No persistent state is required; the proxy can be replicated behind a load‑balancer. |
 | **Ubuntu 26.04 ready** | All dependencies are available via `apt`, `pip`, or `npm` on Ubuntu 26.04. |
-| **Security‑first** | API‑key authentication, optional TLS termination, rate‑limiting, and IP allow‑lists. |
+| **Security‑first** | Single API‑key authentication, request size limits, optional TLS termination. |
 
 ---
 
@@ -37,7 +37,7 @@ Key goals
 
 * **Router/Dispatcher** selects the backend based on the `model` field (or a custom header) and merges per‑model default parameters with the client payload. 
 * **Plug‑in manager** loads optional JavaScript/TypeScript (or Python) modules from a `plugins/` directory. 
-* **Health/metrics** expose `/health` (JSON) and `/metrics` (Prometheus format). 
+* **Health** exposes `/health` (JSON).
 
 ---
 
@@ -49,12 +49,12 @@ Key goals
 | FR‑02 | **Config‑driven backend list** | All backends are defined in `proxy-config.yaml`. |
 | FR‑03 | **Per‑model default parameters** | Each entry in `models[]` may share a `url` with other entries; the **only identifier** that distinguishes them is the `name`. The proxy must apply the entry‑specific `default_params` to every request that references that `name`. |
 | FR‑04 | **Multiple instances of the same checkpoint** | Interpreted as *multiple logical versions* of the same physical checkpoint, **all using the same backend URL**. The config must allow duplicate URLs. |
-| FR‑05 | **API‑key authentication (optional)** | If `auth.api_keys` is present, requests must include a matching `Authorization: Bearer <key>` header. |
+| FR‑05 | **API‑key authentication (optional)** | If `auth.api_key` is set, all requests must include `Authorization: Bearer <key>`. A single global key is used. |
 | FR‑06 | **Plug‑in registration** | Any file in `plugins/` that exports a `register(app)` function is loaded at startup. |
 | FR‑07 | **Request/Response hooks** | Plug‑ins can register `onRequest(req, ctx)` and `onResponse(resp, ctx)` callbacks to modify payloads. |
 | FR‑08 | **Custom agents** | Plug‑ins may expose arbitrary routes (e.g., `/v1/agents/echo`) and be referenced from the config as a synthetic model. |
 | FR‑09 | **Hot reload** | Receiving `SIGHUP` causes the proxy to reload `proxy-config.yaml` without dropping existing connections. |
-| FR‑10 | **Observability** | Expose Prometheus metrics: request count, latency, error count, cache hit‑rate (if caching plug‑in used). |
+
 | FR‑11 | **Graceful shutdown** | On `SIGTERM`/`SIGINT` stop accepting new connections, finish in‑flight requests, then exit. |
 | FR‑12 | **TLS termination (optional)** | Proxy can be placed behind an external TLS terminator (e.g., Nginx, HAProxy) or run with self‑signed certs. |
 
@@ -67,7 +67,7 @@ Key goals
 | NFR‑01 | **Performance** | ≤ 30 ms added latency per request (excluding backend latency) under 100 RPS. |
 | NFR‑02 | **Reliability** | 99.9 % uptime; automatic restart via `systemd`. |
 | NFR‑03 | **Scalability** | Stateless → horizontal scaling via load balancer. |
-| NFR‑04 | **Security** | No code execution from untrusted payloads; input validation; optional rate limiting (e.g., 10 RPS per API key). |
+| NFR‑04 | **Security** | No code execution from untrusted payloads; input validation; request body size limits to prevent DoS. |
 | NFR‑05 | **Portability** | Works on Ubuntu 26.04 LTS with Node 20.x or Python 3.12+. |
 | NFR‑06 | **Maintainability** | All source files are under version control; configuration is human‑readable YAML; plug‑ins are isolated modules. |
 
@@ -85,11 +85,9 @@ listen:
   port: 8080             # TCP port
 
 # --------------------------------------------------------------
-# Optional API‑key authentication
+# Optional single API‑key authentication
 auth:
-  api_keys:               # map of external key → internal token
-    "sk-proxy-abc123": "token-1"
-    "sk-proxy-def456": "token-2"
+  api_key: null           # set a string to require Bearer token auth
 
 # --------------------------------------------------------------
 # Backend model definitions
@@ -147,7 +145,7 @@ plugins_dir: "./plugins"   # relative to the proxy working directory
 |-------|------|
 | `listen.host` | Must be a valid IPv4/IPv6 address or `0.0.0.0`. |
 | `listen.port` | Integer 1‑65535, not in use at startup. |
-| `auth.api_keys` | Keys must be unique strings; values may be any opaque identifier. |
+| `auth.api_key` | If set, all requests require `Authorization: Bearer <api_key>`. Set to `null` to disable. |
 | `models[].name` | **Must be globally unique** (used as the OpenAI‑compatible `model` identifier). |
 | `models[].backend` | Must correspond to a known adapter module (`llama_cpp`, `vllm`, `openai`, …). |
 | `models[].url` | Valid URL with scheme `http` or `https`. **May appear multiple times** – duplicate URLs are allowed. |
@@ -298,8 +296,6 @@ If TLS termination is desired inside the proxy, generate a self‑signed cert or
 
 ### 8.5 Monitoring
 
-* **Prometheus** – scrape `/metrics` (exposed by the proxy). 
-* **Grafana** – visualize request latency, error rate, cache hit‑rate. 
 * **Systemd** – `systemctl status llm-proxy` for health, `journalctl -u llm-proxy -f` for logs.
 
 ---
@@ -311,7 +307,7 @@ If TLS termination is desired inside the proxy, generate a self‑signed cert or
 | **Unit** | Each adapter’s `forward` function with mock HTTP server. | Jest (Node) / pytest (Python) |
 | **Integration** | End‑to‑end request through the proxy to a real backend (e.g., local `llama.cpp`). | `curl` scripts, Postman collection |
 | **Load** | 100 RPS sustained for 5 min, measuring added latency. | `hey`, `wrk`, or `k6` |
-| **Security** | Verify API‑key enforcement, rate‑limit, and request size limits. | `curl` with missing/invalid keys, `ab` for DoS simulation |
+| **Security** | Verify API‑key enforcement and request body size limits. | `curl` with missing/invalid keys, oversized payloads |
 | **Hot‑Reload** | Send `SIGHUP` while serving requests; ensure no 5xx errors. | `kill -HUP <pid>` during load test |
 | **Graceful Shutdown** | Send `SIGTERM`; confirm in‑flight requests complete. | `kill -TERM <pid>` while a client is waiting |
 
@@ -357,7 +353,7 @@ All tests must pass on a clean Ubuntu 26.04 VM.
 * OpenAI API specification – https://platform.openai.com/docs/api-reference 
 * `llama.cpp` HTTP server – https://github.com/ggerganov/llama.cpp/tree/master/examples/server 
 * `vLLM` – https://github.com/vllm-project/vllm 
-* Prometheus client libraries – https://prometheus.io/docs/instrumenting/clientlibs/ 
+
 
 ---
 
@@ -376,7 +372,7 @@ All tests must pass on a clean Ubuntu 26.04 VM.
 | **Ecosystem for HTTP / OpenAI** | • `fastapi` + `httpx` – OpenAPI auto‑generation, pydantic validation, easy dependency injection.<br>• Mature OpenAI SDK (`openai` python) for downstream calls. | • `express` / `fastify` + `axios` or native `http` – lightweight, many middleware libraries.<br>• Official `openai-node` SDK; good for streaming responses. | • **Go**: `net/http`, `chi`, `gin`; `openai-go` SDK is emerging.<br>• **Rust**: `warp`, `actix‑web`, `hyper`; `openai-rust` community crates. |
 | **Plug‑in model** | • Dynamically import Python modules (`importlib`).<br>• No compile step – plug‑ins can be dropped in at runtime. | • `require` / `import` of JS/TS files; hot‑reload possible with `nodemon`.<br>• TypeScript plug‑ins benefit from the same type definitions as core. | • Plug‑ins must be compiled into the binary or loaded as shared libraries (`dlopen`).<br>• More friction; versioning must be managed carefully. |
 | **Packaging & deployment** | • `venv` + `pip` – simple, but need Python runtime on the target host.<br>• Dockerfile size ~ 120 MB (official python‑slim). | • Single‑file `node` binary + `npm ci` – similar Docker size (~ 120 MB node‑slim).<br>• Can bundle with `pkg` or `esbuild` for a single executable if desired. | • Statically linked binaries (especially Rust) → Docker image < 20 MB.<br>• No runtime interpreter needed – easier to run on minimal VMs/containers. |
-| **Observability & tooling** | • `prometheus_client`, `opentelemetry` integrations are mature.<br>• Debugging with `pdb`, `ipython` REPL. | • `prom-client`, `opentelemetry-js`; built‑in `debug` logging.<br>• Node inspector (`chrome://inspect`). | • `prometheus/client_golang`, `opentelemetry-go` or `opentelemetry-rust`.<br>• Debuggers (`dlv` for Go, `gdb`/`lldb` for Rust). |
+| **Observability & tooling** | • `opentelemetry` integrations are mature.<br>• Debugging with `pdb`, `ipython` REPL. | • `opentelemetry-js`; built‑in `debug` logging.<br>• Node inspector (`chrome://inspect`). | • `opentelemetry-go` or `opentelemetry-rust`.<br>• Debuggers (`dlv` for Go, `gdb`/`lldb` for Rust). |
 | **Team skill‑set & hiring** | • Python is ubiquitous in ML teams; most LLM engineers already know it. | • Many full‑stack engineers are comfortable with JavaScript/TS; good if the same repo also contains front‑end tooling. | • Fewer engineers are fluent in Go/Rust; hiring may be harder, but those who know them bring strong systems‑engineering expertise. |
 | **Long‑term maintenance** | • Dynamic language can accumulate runtime bugs; type‑checking via `mypy` helps but is optional.<br>• Frequent library updates (e.g., FastAPI) but stable. | • TypeScript can enforce contracts, reducing regression risk.<br>• Node ecosystem evolves fast; occasional breaking changes in major versions. | • Binary compatibility is stable; once compiled you ship the exact version you tested.<br>• Language upgrades (e.g., Rust 2021 edition) are non‑breaking for most code. |
 | **Community & examples** | • Many open‑source LLM proxies (e.g., `text-generation-webui` extensions) are Python‑based. | • Several Node‑based OpenAI reverse‑proxies exist (e.g., `openai-proxy`, `oai-proxy`). | • Fewer ready‑made examples, but projects like `ollama` (Go) and `tgi` (Rust) show the pattern. |
