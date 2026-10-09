@@ -56,15 +56,47 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     # Request size limit — reject bodies larger than 10 MB to prevent DoS
     MAX_BODY_SIZE = 10 * 1024 * 1024
 
+    class BodyTooLargeError(Exception):
+        """Raised when the request body exceeds MAX_BODY_SIZE."""
+        pass
+
     class BodySizeMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
+            # Fast path: check Content-Length header
             content_length = request.headers.get("Content-Length")
             if content_length and int(content_length) > MAX_BODY_SIZE:
                 return JSONResponse(
                     status_code=413,
                     content={"error": {"message": "Request body too large (max 10 MB)", "type": "payload_too_large", "param": None, "code": 413}},
                 )
-            return await call_next(request)
+
+            # For chunked encoding or missing Content-Length, we need to
+            # enforce the limit by intercepting the receive callable.
+            original_receive = request._receive  # type: ignore[attr-defined]
+            total_size = 0
+
+            async def limited_receive() -> dict:
+                nonlocal total_size
+                message = await original_receive()
+                if message["type"] == "http.request":
+                    body = message.get("body", b"")
+                    total_size += len(body)
+                    if total_size > MAX_BODY_SIZE:
+                        raise BodyTooLargeError()
+                return message
+
+            try:
+                request._receive = limited_receive  # type: ignore[attr-defined]
+            except AttributeError:
+                pass  # Some ASGI servers may not allow this; fall through
+
+            try:
+                return await call_next(request)
+            except BodyTooLargeError:
+                return JSONResponse(
+                    status_code=413,
+                    content={"error": {"message": "Request body too large (max 10 MB)", "type": "payload_too_large", "param": None, "code": 413}},
+                )
 
     app.add_middleware(BodySizeMiddleware)
 

@@ -25,19 +25,26 @@ def register_adapter(name: str) -> Any:
     return wrapper
 
 
-def get_adapter(backend: str) -> BaseAdapter:
+def get_adapter(backend: str, api_key: str | None = None) -> BaseAdapter:
     """Return a new adapter instance for the given backend name.
 
     Falls back to OpenAICompatibleAdapter if the backend is not found.
+
+    Args:
+        backend: Backend name (e.g. "llama_cpp", "openai_compatible").
+        api_key: Optional per-model backend API key (overrides adapter-level).
     """
     cls = _registry.get(backend)
     if cls is None:
         logger.info("Unknown backend '%s', falling back to OpenAICompatibleAdapter", backend)
-        return OpenAICompatibleAdapter()
-    return cls()
+        return OpenAICompatibleAdapter(api_key=api_key)
+    return cls(api_key=api_key)
 
 
-# Auto-register the built-in adapter
+# ── Auto-register built-in adapters ─────────────────────────────────────
+
+from .llama_cpp import LlamaCppAdapter  # noqa: E402 — imported after registry is defined
+register_adapter("llama_cpp")(LlamaCppAdapter)
 register_adapter("openai_compatible")(OpenAICompatibleAdapter)
 
-__all__ = ["BaseAdapter", "BackendError", "OpenAICompatibleAdapter", "get_adapter", "register_adapter"]
+__all__ = ["BaseAdapter", "BackendError", "LlamaCppAdapter", "OpenAICompatibleAdapter", "get_adapter", "register_adapter"]

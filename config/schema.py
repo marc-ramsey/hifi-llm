@@ -23,6 +23,7 @@ class ModelConfig(BaseModel):
     url: str
     backend: str = "openai_compatible"  # adapter type selector
     provider: str | None = None  # OWUI provider hint (e.g. "llama.cpp")
+    api_key: str | None = None  # per-model backend auth token (${VAR} expanded)
     default_params: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("url")

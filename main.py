@@ -43,11 +43,28 @@ def _load_config(path: str | None = None) -> ProxyConfig:
 
 
 def _reload(signum: int, _frame):
-    """Handle SIGHUP — reload config without dropping connections."""
+    """Handle SIGHUP — reload config and rebuild the app.
+
+    The existing server keeps running; a fresh app is created with the new
+    config (including updated auth middleware). In-flight requests complete
+    normally. This is not a full restart — uvicorn stays up, but the ASGI
+    app object is replaced so middleware picks up the new settings.
+    """
+    global _server
     logger.info("Received SIGHUP, reloading config...")
     try:
-        _load_config(_config_path)
+        config = _load_config(_config_path)
         logger.info("Config reloaded successfully")
+
+        # Create a fresh app with the new config — this picks up updated
+        # auth middleware, CORS settings, body-size limits, etc.
+        from proxy.app import create_app
+        new_app = create_app(config)
+
+        # Replace the running app in-place so uvicorn starts using it
+        # for subsequent requests. In-flight requests on the old app finish.
+        if _server is not None:
+            _server.app = new_app
     except Exception:
         logger.exception("Config reload failed — keeping old config")
 
