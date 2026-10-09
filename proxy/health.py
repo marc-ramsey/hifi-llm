@@ -232,12 +232,11 @@ def start_health_probe(
 
     Args:
         models: List of ModelConfig objects to probe.
-        interval: Seconds between probes (default 30).
+        interval: Seconds between probes (default 2.0).
     """
-    global _health_task, _probe_interval
+    global _health_task
     if _health_task is not None and not _health_task.done():
         return  # already running
-    _probe_interval = interval
     try:
         asyncio.get_running_loop()
     except RuntimeError:
@@ -255,8 +254,36 @@ def stop_health_probe() -> None:
     global _health_task
     if _health_task is not None and not _health_task.done():
         _health_task.cancel()
+        try:
+            _health_task.result(timeout=2.0)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass  # task may have already finished
         _health_task = None
         logger.info("Health probe stopped")
+
+
+def restart_health_probe(
+    models: list[Any],
+    interval: float = 2.0,
+) -> None:
+    """Stop the current probe and start a new one with updated models.
+
+    Used after config reload (SIGHUP) to refresh the model list being probed.
+    """
+    global _health_task
+    old = _health_task
+    if old is not None and not old.done():
+        old.cancel()
+        try:
+            old.result(timeout=2.0)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+    _health_task = None  # allow start_health_probe to create a fresh task
+    start_health_probe(models, interval=interval)
 
 
 def _current_report() -> HealthReport:

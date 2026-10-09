@@ -12,7 +12,7 @@ import uvicorn
 from config import ProxyConfig, get, set
 from config.loader import load_config, resolve_config_path
 from proxy.app import create_app
-from proxy.health import collect_health, log_health_report, stop_health_probe
+from proxy.health import stop_health_probe
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,20 +25,9 @@ _server: uvicorn.Server | None = None
 
 
 def _load_config(path: str | None = None) -> ProxyConfig:
-    """Load and validate config, set in registry. Probe backends after loading."""
+    """Load and validate config, set in registry."""
     config = load_config(path)
     set(config)
-
-    # Probe all backends and log status
-    report = asyncio.run(collect_health(config.models, timeout=2.0))
-    log_health_report(report)
-
-    if report.any_unhealthy:
-        logger.warning(
-            "%d/%d backends unhealthy — proxy running in degraded mode",
-            report.unhealthy_count, report.total,
-        )
-
     return config
 
 
@@ -55,6 +44,11 @@ def _reload(signum: int, _frame):
     try:
         config = _load_config(_config_path)
         logger.info("Config reloaded successfully")
+
+        # Restart the health probe with the new model list so it probes
+        # the updated set of backends instead of the stale one.
+        from proxy.health import restart_health_probe
+        restart_health_probe(config.models, interval=config.health_check_interval)
 
         # Create a fresh app with the new config — this picks up updated
         # auth middleware, CORS settings, body-size limits, etc.

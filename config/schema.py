@@ -18,7 +18,19 @@ class AuthConfig(BaseModel):
 
 
 class ModelConfig(BaseModel):
-    """One model entry — the `name` is the sole identifier."""
+    """One model entry — the `name` is the sole identifier.
+
+    Fields:
+        name: Unique model name (used as the OpenAI `model` identifier).
+        url: Backend server URL.
+        backend: Adapter type selector (e.g. "llama_cpp", "openai_compatible").
+                 Determines how requests are forwarded and responses normalised.
+        provider: Optional display hint for frontends like Open WebUI
+                  (e.g. "llama.cpp"). Does NOT affect routing — use `backend`
+                  for that.
+        api_key: Optional per-model backend auth token (${VAR} expanded).
+        default_params: Default sampling parameters merged into each request.
+    """
     name: str
     url: str
     backend: str = "openai_compatible"  # adapter type selector

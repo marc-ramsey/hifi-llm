@@ -1,4 +1,4 @@
-# SPECFICATION.md
+# SPECIFICATION.md
 **Simple LLM‑Proxy – A language‑agnostic, Ubuntu 26.04‑targeted design**
 Version: 1.0.0
 Date: 2026‑10‑08
