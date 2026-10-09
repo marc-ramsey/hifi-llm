@@ -110,6 +110,10 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Access log middleware — structured JSON per-request logging
+    from .middleware.access_log import AccessLogMiddleware
+    app.add_middleware(AccessLogMiddleware)
+
     # Auth middleware — reads api_key dynamically from the config registry
     # so that SIGHUP reloads take effect without rebuilding the app.
     from .middleware import AuthMiddleware
