@@ -6,26 +6,28 @@ import logging
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-import asyncio
-
-from config import ProxyConfig, get, set
+from config import ProxyConfig, get
 
 
 logger = logging.getLogger(__name__)
 
 
 def create_app(config: ProxyConfig | None = None) -> FastAPI:
-    """Create and configure the FastAPI application."""
+    """Create and configure the FastAPI application.
+
+    Each call builds a fresh app from the provided config (or the current
+    global config if *config* is None).  This function is idempotent — it
+    can be called at startup and on every SIGHUP reload.
+    """
 
     async def _lifespan(app):
-        from proxy.health import start_health_probe, _deferred_models
-        if _deferred_models is not None:
-            start_health_probe(_deferred_models)
+        # Health probe is started by ConfigReloadableApp, not per-FastAPI instance.
+        # The lifespan here exists only so the FastAPI object satisfies uvicorn's
+        # interface; no background tasks are needed inside it.
         yield
 
     app = FastAPI(
@@ -108,7 +110,8 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Auth middleware — registered before routes
+    # Auth middleware — reads api_key dynamically from the config registry
+    # so that SIGHUP reloads take effect without rebuilding the app.
     from .middleware import AuthMiddleware
     auth_cfg = config.auth if config else get().auth
     app.add_middleware(AuthMiddleware, api_key=auth_cfg.api_key)
@@ -135,18 +138,10 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
             }
         return result
 
-    # Start periodic health probe task
-    from proxy.health import start_health_probe, stop_health_probe
-    interval = config.health_check_interval if config else 2.0
-    start_health_probe(config.models, interval=interval)
-
     # Load plugins after routes are registered (plugins can add their own routes)
     plugins_dir = config.plugins_dir if config else get().plugins_dir
     if plugins_dir:
         from plugins.manager import load_plugins
         load_plugins(Path(plugins_dir), app)
-
-    # Store cleanup hook on the app for graceful shutdown
-    app.state.stop_health_probe = stop_health_probe
 
     return app

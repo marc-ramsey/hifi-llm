@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""HiFi — run commands inside the hifi virtualenv.
-
-Usage:
-    ./hifi main.py --config my-config.yaml
-    ./hifi -m pytest tests/ -v
-    ./hifi -c 'print("hello")'
-"""
+"""HiFi — run the proxy inside the venv."""
 
 from __future__ import annotations
 
@@ -15,14 +9,11 @@ from pathlib import Path
 
 _VENV_PYTHON = Path(__file__).resolve().parent / ".venv" / "bin" / "python"
 
-
 def main() -> None:
     if not _VENV_PYTHON.exists():
         print(f"Error: venv python not found at {_VENV_PYTHON}", file=sys.stderr)
         sys.exit(1)
-
-    os.execv(str(_VENV_PYTHON), [str(_VENV_PYTHON)] + sys.argv[1:])
-
+    os.execv(str(_VENV_PYTHON), [str(_VENV_PYTHON), str(Path(__file__).resolve().parent / "main.py")] + sys.argv[1:])
 
 if __name__ == "__main__":
     main()

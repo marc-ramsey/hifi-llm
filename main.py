@@ -11,8 +11,8 @@ import uvicorn
 
 from config import ProxyConfig, get, set
 from config.loader import load_config, resolve_config_path
-from proxy.app import create_app
-from proxy.health import stop_health_probe
+from proxy.health import restart_health_probe, stop_health_probe
+from proxy.reloadable import ConfigReloadableApp
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,6 +22,7 @@ logger = logging.getLogger("llm-proxy")
 
 _config_path: str | None = None
 _server: uvicorn.Server | None = None
+_reloadable_app: ConfigReloadableApp | None = None
 
 
 def _load_config(path: str | None = None) -> ProxyConfig:
@@ -31,15 +32,15 @@ def _load_config(path: str | None = None) -> ProxyConfig:
     return config
 
 
-def _reload(signum: int, _frame):
-    """Handle SIGHUP — reload config and rebuild the app.
+def _reload(signum: int, _frame) -> None:
+    """Handle SIGHUP — reload config and swap the ASGI app.
 
-    The existing server keeps running; a fresh app is created with the new
-    config (including updated auth middleware). In-flight requests complete
-    normally. This is not a full restart — uvicorn stays up, but the ASGI
-    app object is replaced so middleware picks up the new settings.
+    The ConfigReloadableApp wrapper ensures uvicorn always sees the same
+    object while new requests use the freshly-built app from updated
+    config (including auth middleware, CORS settings, body-size limits,
+    plugins, etc.).  In-flight requests on the old app complete normally.
     """
-    global _server
+    global _reloadable_app
     logger.info("Received SIGHUP, reloading config...")
     try:
         config = _load_config(_config_path)
@@ -47,25 +48,21 @@ def _reload(signum: int, _frame):
 
         # Restart the health probe with the new model list so it probes
         # the updated set of backends instead of the stale one.
-        from proxy.health import restart_health_probe
         restart_health_probe(config.models, interval=config.health_check_interval)
 
-        # Create a fresh app with the new config — this picks up updated
-        # auth middleware, CORS settings, body-size limits, etc.
-        from proxy.app import create_app
-        new_app = create_app(config)
+        # Swap to a fresh ASGI app — this picks up updated auth middleware,
+        # CORS settings, body-size limits, plugins, etc.  In-flight requests
+        # on the old app finish naturally; new requests use the new one.
+        if _reloadable_app is not None:
+            _reloadable_app.reload()
 
-        # Replace the running app in-place so uvicorn starts using it
-        # for subsequent requests. In-flight requests on the old app finish.
-        if _server is not None:
-            _server.app = new_app
     except Exception:
         logger.exception("Config reload failed — keeping old config")
 
 
 def run(config_path: str | None = None) -> None:
     """Bootstrap the proxy and start serving."""
-    global _config_path, _server
+    global _config_path, _server, _reloadable_app
 
     _config_path = config_path
 
@@ -81,8 +78,8 @@ def run(config_path: str | None = None) -> None:
     # sets should_exit=True and performs graceful shutdown automatically.
     signal.signal(signal.SIGHUP, _reload)
 
-    # Create app
-    app = create_app(config)
+    # Create the reloadable app wrapper — uvicorn always sees this same object.
+    _reloadable_app = ConfigReloadableApp(initial_config=config)
 
     # Determine server config
     listen_cfg = config.listen
@@ -93,9 +90,9 @@ def run(config_path: str | None = None) -> None:
     resolved = resolve_config_path(config_path)
     logger.info("Config file: %s", resolved)
 
-    # Start server
+    # Start server — the reloadable wrapper is passed as the ASGI app.
     server_config = uvicorn.Config(
-        app,
+        _reloadable_app,
         host=host,
         port=port,
         log_level="info",
