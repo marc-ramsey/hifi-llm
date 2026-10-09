@@ -17,6 +17,8 @@ import time
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from .request_id import get_request_id
+
 
 logger = logging.getLogger("llm-proxy.access")
 
@@ -46,6 +48,7 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
         status = response.status_code if hasattr(response, "status_code") else 200
 
         log_entry = {
+            "request_id": get_request_id(request),
             "method": request.method,
             "path": request.url.path,
             "status": status,

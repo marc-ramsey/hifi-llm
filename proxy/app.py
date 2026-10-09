@@ -110,6 +110,11 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Request ID middleware — generates UUID per request, injected into
+    # response headers and all structured logs for tracing.
+    from .middleware.request_id import RequestIDMiddleware
+    app.add_middleware(RequestIDMiddleware)
+
     # Access log middleware — structured JSON per-request logging
     from .middleware.access_log import AccessLogMiddleware
     app.add_middleware(AccessLogMiddleware)
