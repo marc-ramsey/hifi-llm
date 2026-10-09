@@ -102,13 +102,15 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
 
     app.add_middleware(BodySizeMiddleware)
 
-    # CORS — allow all origins for development; lock down in production
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # CORS — configured per-environment; defaults to allow-all for dev
+    cors_cfg = config.cors if config else get().cors
+    if cors_cfg.enabled:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_cfg.allow_origins,
+            allow_methods=cors_cfg.allow_methods,
+            allow_headers=cors_cfg.allow_headers,
+        )
 
     # Metrics store — singleton that survives SIGHUP reloads so Prometheus
     # counters remain monotonically increasing.

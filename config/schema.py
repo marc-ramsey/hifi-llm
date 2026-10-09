@@ -13,6 +13,14 @@ class ListenConfig(BaseModel):
     port: int = Field(default=8080, ge=1, le=65535)
 
 
+class CORSConfig(BaseModel):
+    """CORS policy — allow all origins for development; lock down in production."""
+    enabled: bool = True
+    allow_origins: list[str] = Field(default=["*"], description="List of allowed origins. Use [\"*\"] for development.")
+    allow_methods: list[str] = Field(default=["*"], description="Allowed HTTP methods.")
+    allow_headers: list[str] = Field(default=["*"], description="Allowed request headers.")
+
+
 class AuthConfig(BaseModel):
     api_key: str | None = None
 
@@ -57,6 +65,7 @@ class ModelConfig(BaseModel):
 
 class ProxyConfig(BaseModel):
     listen: ListenConfig = Field(default_factory=ListenConfig)
+    cors: CORSConfig = Field(default_factory=CORSConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
     models: list[ModelConfig] = Field(default_factory=list)

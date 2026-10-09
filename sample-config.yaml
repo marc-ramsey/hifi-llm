@@ -2,6 +2,12 @@ listen:
   host: 0.0.0.0      # bind address
   port: 8080          # bind port
 
+cors:
+  enabled: true       # set false to disable CORS entirely
+  allow_origins: ["*"]  # lock down to specific origins in production (e.g. ["https://webui.example.com"])
+  allow_methods: ["*"]
+  allow_headers: ["*"]
+
 auth:
   api_key: null       # set a string to require Bearer token auth
 
