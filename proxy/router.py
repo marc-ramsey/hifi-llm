@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from config import get
-from adapters.base import BackendError, OpenAICompatibleAdapter
+from adapters import get_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ async def _forward_stream(request: Request, endpoint: str) -> StreamingResponse:
     """Generic SSE streaming proxy for any endpoint."""
     model_config, payload = await _resolve_and_merge(request)
 
-    adapter = OpenAICompatibleAdapter()
+    adapter = get_adapter(model_config.backend)
     stream = adapter.forward_stream(
         url=model_config.url,
         endpoint=endpoint,
@@ -114,7 +114,7 @@ async def _forward_json(request: Request, endpoint: str) -> JSONResponse:
     """Generic JSON proxy for any endpoint."""
     model_config, payload = await _resolve_and_merge(request)
 
-    adapter = OpenAICompatibleAdapter()
+    adapter = get_adapter(model_config.backend)
     response = await adapter.forward_json(
         url=model_config.url,
         endpoint=endpoint,
