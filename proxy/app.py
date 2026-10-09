@@ -114,19 +114,20 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     from proxy.metrics import MetricsStore
     metrics = MetricsStore()
 
-    # Rate-limit middleware — per-IP sliding window with per-endpoint overrides
-    from .middleware.rate_limit import RateLimitMiddleware
-    rate_cfg = config.rate_limit if config else get().rate_limit
-    app.add_middleware(RateLimitMiddleware, config=rate_cfg, metrics=metrics)
-
     # Request ID middleware — generates UUID per request, injected into
     # response headers and all structured logs for tracing.
     from .middleware.request_id import RequestIDMiddleware
     app.add_middleware(RequestIDMiddleware)
 
     # Access log middleware — structured JSON per-request logging
+    # (must come after RequestID so the ID is available in request.state)
     from .middleware.access_log import AccessLogMiddleware
     app.add_middleware(AccessLogMiddleware, metrics=metrics)
+
+    # Rate-limit middleware — per-IP sliding window with per-endpoint overrides
+    from .middleware.rate_limit import RateLimitMiddleware
+    rate_cfg = config.rate_limit if config else get().rate_limit
+    app.add_middleware(RateLimitMiddleware, config=rate_cfg, metrics=metrics)
 
     # Auth middleware — reads api_key dynamically from the config registry
     # so that SIGHUP reloads take effect without rebuilding the app.
