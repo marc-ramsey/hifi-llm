@@ -25,6 +25,19 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Module-level singleton — survives across create_app() calls during SIGHUP
+# reloads. Prometheus counters must be monotonically increasing; resetting
+# them on reload would break dashboards and alerting.
+_instance: MetricsStore | None = None
+
+
+def get_metrics_store() -> MetricsStore:
+    """Return the singleton MetricsStore, creating it on first call."""
+    global _instance
+    if _instance is None:
+        _instance = MetricsStore()
+    return _instance
+
 
 class MetricsStore:
     """In-memory counters for the /metrics endpoint.

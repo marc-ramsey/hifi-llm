@@ -110,9 +110,10 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Metrics store — shared across all app instances (survives reloads)
-    from proxy.metrics import MetricsStore
-    metrics = MetricsStore()
+    # Metrics store — singleton that survives SIGHUP reloads so Prometheus
+    # counters remain monotonically increasing.
+    from proxy.metrics import get_metrics_store
+    metrics = get_metrics_store()
 
     # Request ID middleware — generates UUID per request, injected into
     # response headers and all structured logs for tracing.
