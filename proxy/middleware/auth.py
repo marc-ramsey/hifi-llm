@@ -28,9 +28,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if not api_key:
             return await call_next(request)
 
-        # Public endpoints — no auth required
-        if request.url.path in ("/health",):
-            return await call_next(request)
+        # No public endpoints — all requests require auth when api_key is set
 
         auth = request.headers.get("Authorization", "")
         expected = f"Bearer {api_key}"
