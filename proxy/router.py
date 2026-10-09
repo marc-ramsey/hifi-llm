@@ -75,7 +75,13 @@ async def _resolve_and_merge(request: Request):
 
 
 async def _forward_stream(request: Request, endpoint: str) -> StreamingResponse:
-    """Generic SSE streaming proxy for any endpoint."""
+    """Generic SSE streaming proxy for any endpoint.
+
+    Wraps the adapter's raw byte stream in SSE format. If the backend
+    raises an error mid-stream (connection reset, 5xx after some data,
+    etc.), we emit an OpenAI-compatible error chunk so the client gets
+    a clean signal instead of silent corruption.
+    """
     model_config, payload = await _resolve_and_merge(request)
 
     adapter = get_adapter(model_config.backend, api_key=model_config.api_key)
@@ -88,25 +94,40 @@ async def _forward_stream(request: Request, endpoint: str) -> StreamingResponse:
     async def chunk_iterator() -> AsyncIterator[str]:
         """Yield SSE-formatted chunks from the backend response."""
         buffer = b""
-        async for chunk_bytes in stream:
-            buffer += chunk_bytes
-            while b"\n" in buffer:
-                line, buffer = buffer.split(b"\n", 1)
-                line_str = line.decode("utf-8").strip()
-                if line_str.startswith("data: "):
-                    data = line_str[6:]
-                    if data == "[DONE]":
-                        yield "data: [DONE]\n\n"
-                        return
-                    try:
-                        parsed = json.loads(data)
-                        for choice in parsed.get("choices", []):
-                            delta = choice.get("delta")
-                            if delta and isinstance(delta, dict):
-                                choice["delta"] = _normalize_delta(delta)
-                        yield f"data: {json.dumps(parsed, ensure_ascii=False)}\n\n"
-                    except json.JSONDecodeError:
-                        yield f"data: {data}\n\n"
+        try:
+            async for chunk_bytes in stream:
+                buffer += chunk_bytes
+                while b"\n" in buffer:
+                    line, buffer = buffer.split(b"\n", 1)
+                    line_str = line.decode("utf-8").strip()
+                    if line_str.startswith("data: "):
+                        data = line_str[6:]
+                        if data == "[DONE]":
+                            yield "data: [DONE]\n\n"
+                            return
+                        try:
+                            parsed = json.loads(data)
+                            for choice in parsed.get("choices", []):
+                                delta = choice.get("delta")
+                                if delta and isinstance(delta, dict):
+                                    choice["delta"] = _normalize_delta(delta)
+                            yield f"data: {json.dumps(parsed, ensure_ascii=False)}\n\n"
+                        except json.JSONDecodeError:
+                            yield f"data: {data}\n\n"
+        except Exception as exc:
+            # Backend error mid-stream — emit an OpenAI-compatible error
+            # chunk so the client gets a clean signal instead of silent
+            # connection reset or garbage data.
+            logger.warning("Stream error on %s: %s", request.url.path, exc)
+            yield json.dumps({
+                "error": {
+                    "message": str(exc),
+                    "type": "backend_error",
+                    "param": None,
+                    "code": 502,
+                },
+            }) + "\n\n"
+            yield "data: [DONE]\n\n"
 
     return StreamingResponse(
         chunk_iterator(),
