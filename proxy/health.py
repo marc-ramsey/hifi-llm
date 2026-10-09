@@ -45,14 +45,6 @@ class HealthReport:
     unhealthy_count: int = 0
     total: int = 0
 
-    @property
-    def all_healthy(self) -> bool:
-        return self.unhealthy_count == 0
-
-    @property
-    def any_unhealthy(self) -> bool:
-        return self.unhealthy_count > 0
-
 
 # ── Probe function ──────────────────────────────────────────────────────────
 
@@ -161,46 +153,48 @@ async def collect_health(
 
 # ── Logging helper ──────────────────────────────────────────────────────────
 
-def log_health_report(report: HealthReport, warn_on_change: bool = True) -> None:
-    """Log a formatted health report.
-
-    On first call (startup), always logs the full report.
-    On subsequent calls, only warns when status changes occur.
-    """
+def log_health_report(report: HealthReport) -> None:
+    """Log backend health. First call always logs full report; subsequent calls
+    only warn on status changes."""
     global _previous_status
 
+    current = {bh.name: bh.status for bh in report.backends}
+
     if _previous_status is None:
-        # First call — startup: always log everything
+        # Startup — always log everything
         lines = [f"Backend health ({report.total} models):"]
         for bh in report.backends:
-            if bh.status == HealthStatus.HEALTHY:
-                suffix = f" {bh.latency_ms:.0f}ms"
+            tag = {HealthStatus.HEALTHY: "OK", HealthStatus.DEGRADED: "WARN",
+                   HealthStatus.UNHEALTHY: "FAIL"}[bh.status]
+            parts = [f"  [{tag:4s}] {bh.name} -> {bh.url}"]
+            if bh.status == HealthStatus.HEALTHY and bh.latency_ms is not None:
+                parts.append(f"{bh.latency_ms:.0f}ms")
                 if bh.model_count is not None:
-                    suffix += f" ({bh.model_count} models)"
-                lines.append(f"  [OK]     {bh.name} -> {bh.url}{suffix}")
-            elif bh.status == HealthStatus.DEGRADED:
-                lines.append(f"  [WARN]   {bh.name} -> {bh.url} — {bh.error}")
-            else:
-                lines.append(f"  [FAIL]   {bh.name} -> {bh.url} — {bh.error}")
+                    parts.append(f"({bh.model_count} models)")
+            if bh.error:
+                parts.append(f"— {bh.error}")
+            lines.append(" ".join(parts))
         logger.info("\n" + "\n".join(lines))
-        _previous_status = {bh.name: bh.status for bh in report.backends}
     else:
-        # Subsequent calls: detect changes
-        current = {bh.name: bh.status for bh in report.backends}
-        changed = []
-        for name, new_status in current.items():
-            old_status = _previous_status.get(name)
-            if old_status is not None and old_status != new_status:
-                changed.append((name, old_status, new_status))
+        # Detect changes — log only deltas
+        changed = [
+            (name, _previous_status[name], new_s)
+            for name, new_s in current.items()
+            if _previous_status.get(name) != new_s
+        ]
 
         if changed:
             lines = ["Backend health changes:"]
+            # Build a name→BackendHealth map for error lookups
+            bh_map = {bh.name: bh for bh in report.backends}
             for name, old_s, new_s in changed:
                 direction = "DOWN" if new_s != HealthStatus.HEALTHY else "UP"
-                lines.append(f"  [{direction}] {name}: {old_s.value} -> {new_s.value}" + (f" — {current[name].error}" if current[name].error else ""))
+                bh = bh_map.get(name)
+                err_msg = f" — {bh.error}" if bh and bh.error else ""
+                lines.append(f"  [{direction}] {name}: {old_s.value} -> {new_s.value}{err_msg}")
             logger.warning("\n" + "\n".join(lines))
 
-        _previous_status = current
+    _previous_status = current
 
 
 # ── Periodic probe task ─────────────────────────────────────────────────────

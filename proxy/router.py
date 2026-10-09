@@ -1,8 +1,13 @@
-"""Route handlers — /v1/models and /v1/chat/completions."""
+"""Route handlers — /v1/models and /v1/chat/completions.
+
+The router is a dumb pipe: resolve the model, merge defaults, forward to the
+adapter.  Streaming responses are passed through byte-for-byte — no JSON
+parsing, no delta inspection.  The adapter guarantees that its generator
+never raises; errors are yielded as SSE error chunks instead.
+"""
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import AsyncIterator
 
@@ -22,7 +27,6 @@ def _resolve_model_config(model_name: str):
     for model in get().models:
         if model.name == model_name:
             return model
-    # Build list of valid names for the error message
     valid = ", ".join(m.name for m in get().models)
     raise HTTPException(
         status_code=400,
@@ -35,8 +39,6 @@ def _resolve_model_config(model_name: str):
     )
 
 
-
-
 def _merge_defaults(payload: dict, defaults: dict) -> dict:
     """Merge default_params into the request payload.
     Client values override defaults.
@@ -45,22 +47,10 @@ def _merge_defaults(payload: dict, defaults: dict) -> dict:
     return merged
 
 
-def _normalize_delta(delta: dict) -> dict:
-    """No-op — pass deltas through unchanged.
-
-    Open WebUI handles reasoning_content via its structured output (Path 2),
-    showing thinking in a collapsible section and content in the main area.
-    We used to fold reasoning → content but that mixed thinking into the
-    response text. Leave deltas as the backend sends them.
-    """
-    return delta
-
-
 async def _resolve_and_merge(request: Request):
     """Resolve model config and merge defaults. Returns (model_config, payload).
 
-    Caches the parsed body on request.state so middleware can read it without
-    consuming the stream again.
+    Caches the parsed body on request.state so it's only parsed once.
     """
     if not hasattr(request.state, "_request_body"):
         body = await request.json()
@@ -75,12 +65,11 @@ async def _resolve_and_merge(request: Request):
 
 
 async def _forward_stream(request: Request, endpoint: str) -> StreamingResponse:
-    """Generic SSE streaming proxy for any endpoint.
+    """SSE pass-through proxy.
 
-    Wraps the adapter's raw byte stream in SSE format. If the backend
-    raises an error mid-stream (connection reset, 5xx after some data,
-    etc.), we emit an OpenAI-compatible error chunk so the client gets
-    a clean signal instead of silent corruption.
+    The adapter's forward_stream yields raw bytes (already SSE-formatted).
+    We buffer-split on newlines and forward complete SSE lines unchanged.
+    Error handling is the adapter's responsibility — it never raises.
     """
     model_config, payload = await _resolve_and_merge(request)
 
@@ -92,42 +81,23 @@ async def _forward_stream(request: Request, endpoint: str) -> StreamingResponse:
     )
 
     async def chunk_iterator() -> AsyncIterator[str]:
-        """Yield SSE-formatted chunks from the backend response."""
+        """Forward SSE lines from the backend unchanged."""
         buffer = b""
-        try:
-            async for chunk_bytes in stream:
-                buffer += chunk_bytes
-                while b"\n" in buffer:
-                    line, buffer = buffer.split(b"\n", 1)
-                    line_str = line.decode("utf-8").strip()
-                    if line_str.startswith("data: "):
-                        data = line_str[6:]
-                        if data == "[DONE]":
-                            yield "data: [DONE]\n\n"
-                            return
-                        try:
-                            parsed = json.loads(data)
-                            for choice in parsed.get("choices", []):
-                                delta = choice.get("delta")
-                                if delta and isinstance(delta, dict):
-                                    choice["delta"] = _normalize_delta(delta)
-                            yield f"data: {json.dumps(parsed, ensure_ascii=False)}\n\n"
-                        except json.JSONDecodeError:
-                            yield f"data: {data}\n\n"
-        except Exception as exc:
-            # Backend error mid-stream — emit an OpenAI-compatible error
-            # chunk so the client gets a clean signal instead of silent
-            # connection reset or garbage data.
-            logger.warning("Stream error on %s: %s", request.url.path, exc)
-            yield json.dumps({
-                "error": {
-                    "message": str(exc),
-                    "type": "backend_error",
-                    "param": None,
-                    "code": 502,
-                },
-            }) + "\n\n"
-            yield "data: [DONE]\n\n"
+        async for chunk_bytes in stream:
+            buffer += chunk_bytes
+            while b"\n" in buffer:
+                line, buffer = buffer.split(b"\n", 1)
+                stripped = line.decode("utf-8").strip()
+                if stripped.startswith("data: "):
+                    data = stripped[6:]
+                    yield f"data: {data}\n\n"
+                    if data == "[DONE]":
+                        return
+                elif stripped.startswith("data:"):
+                    data = stripped[5:].lstrip()
+                    yield f"data:{data}\n\n"
+                    if data == "[DONE]":
+                        return
 
     return StreamingResponse(
         chunk_iterator(),
@@ -135,7 +105,7 @@ async def _forward_stream(request: Request, endpoint: str) -> StreamingResponse:
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # Disable nginx buffering
+            "X-Accel-Buffering": "no",
         },
     )
 
@@ -187,14 +157,7 @@ async def list_models():
 
 @router.post("/chat/completions")
 async def chat_completions(request: Request):
-    """
-    Proxy /v1/chat/completions.
-    If stream=true, returns SSE StreamingResponse.
-    Otherwise returns JSONResponse with the full body.
-    """
-    # _resolve_and_merge caches the body on request.state on first call;
-    # streaming paths call it directly, non-streaming paths call
-    # _forward_json which calls it — in both cases the body is parsed once.
+    """Proxy /v1/chat/completions. Stream or JSON, delegated to adapter."""
     if not hasattr(request.state, "_request_body"):
         await _resolve_and_merge(request)
     body = request.state._request_body
@@ -216,11 +179,7 @@ async def embeddings(request: Request):
 
 @router.post("/completions")
 async def completions(request: Request):
-    """
-    Proxy /v1/completions (legacy endpoint).
-    If stream=true, returns SSE StreamingResponse.
-    Otherwise returns JSONResponse with the full body.
-    """
+    """Proxy /v1/completions. Stream or JSON, delegated to adapter."""
     if not hasattr(request.state, "_request_body"):
         await _resolve_and_merge(request)
     body = request.state._request_body
@@ -228,6 +187,3 @@ async def completions(request: Request):
         return await _forward_stream(request, "/v1/completions")
     else:
         return await _forward_json(request, "/v1/completions")
-
-
-

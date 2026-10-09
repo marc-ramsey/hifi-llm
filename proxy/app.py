@@ -8,10 +8,8 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import ProxyConfig, get
-
 
 logger = logging.getLogger(__name__)
 
@@ -20,14 +18,13 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     """Create and configure the FastAPI application.
 
     Each call builds a fresh app from the provided config (or the current
-    global config if *config* is None).  This function is idempotent — it
-    can be called at startup and on every SIGHUP reload.
+    global config if *config* is None).  Idempotent — safe to call on SIGHUP.
     """
 
+    # ── App scaffold ──────────────────────────────────────────────────────
+
     async def _lifespan(app):
-        # Health probe is started by ConfigReloadableApp, not per-FastAPI instance.
-        # The lifespan here exists only so the FastAPI object satisfies uvicorn's
-        # interface; no background tasks are needed inside it.
+        # Health probe is managed by ConfigReloadableApp, not per-instance.
         yield
 
     app = FastAPI(
@@ -37,7 +34,8 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         lifespan=_lifespan,
     )
 
-    # Convert BackendError (from adapters) into OpenAI-style 502 responses
+    # ── Exception handlers ────────────────────────────────────────────────
+
     from adapters.base import BackendError
 
     @app.exception_handler(BackendError)
@@ -55,54 +53,11 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
             },
         )
 
-    # Request size limit — reject bodies larger than 10 MB to prevent DoS
-    MAX_BODY_SIZE = 10 * 1024 * 1024
+    # ── Middleware (outermost → innermost) ────────────────────────────────
 
-    class BodyTooLargeError(Exception):
-        """Raised when the request body exceeds MAX_BODY_SIZE."""
-        pass
-
-    class BodySizeMiddleware(BaseHTTPMiddleware):
-        async def dispatch(self, request: Request, call_next):
-            # Fast path: check Content-Length header
-            content_length = request.headers.get("Content-Length")
-            if content_length and int(content_length) > MAX_BODY_SIZE:
-                return JSONResponse(
-                    status_code=413,
-                    content={"error": {"message": "Request body too large (max 10 MB)", "type": "payload_too_large", "param": None, "code": 413}},
-                )
-
-            # For chunked encoding or missing Content-Length, we need to
-            # enforce the limit by intercepting the receive callable.
-            original_receive = request._receive  # type: ignore[attr-defined]
-            total_size = 0
-
-            async def limited_receive() -> dict:
-                nonlocal total_size
-                message = await original_receive()
-                if message["type"] == "http.request":
-                    body = message.get("body", b"")
-                    total_size += len(body)
-                    if total_size > MAX_BODY_SIZE:
-                        raise BodyTooLargeError()
-                return message
-
-            try:
-                request._receive = limited_receive  # type: ignore[attr-defined]
-            except AttributeError:
-                pass  # Some ASGI servers may not allow this; fall through
-
-            try:
-                return await call_next(request)
-            except BodyTooLargeError:
-                return JSONResponse(
-                    status_code=413,
-                    content={"error": {"message": "Request body too large (max 10 MB)", "type": "payload_too_large", "param": None, "code": 413}},
-                )
-
+    from .middleware.body_size import BodySizeMiddleware
     app.add_middleware(BodySizeMiddleware)
 
-    # CORS — configured per-environment; defaults to allow-all for dev
     cors_cfg = config.cors if config else get().cors
     if cors_cfg.enabled:
         app.add_middleware(
@@ -112,41 +67,30 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
             allow_headers=cors_cfg.allow_headers,
         )
 
-    # Metrics store — singleton that survives SIGHUP reloads so Prometheus
-    # counters remain monotonically increasing.
-    from proxy.metrics import get_metrics_store
-    metrics = get_metrics_store()
-
-    # Request ID middleware — generates UUID per request, injected into
-    # response headers and all structured logs for tracing.
     from .middleware.request_id import RequestIDMiddleware
     app.add_middleware(RequestIDMiddleware)
 
-    # Access log middleware — structured JSON per-request logging
-    # (must come after RequestID so the ID is available in request.state)
+    metrics = _get_metrics_store()
     from .middleware.access_log import AccessLogMiddleware
     app.add_middleware(AccessLogMiddleware, metrics=metrics)
 
-    # Rate-limit middleware — per-IP sliding window with per-endpoint overrides
     from .middleware.rate_limit import RateLimitMiddleware
     rate_cfg = config.rate_limit if config else get().rate_limit
     app.add_middleware(RateLimitMiddleware, config=rate_cfg, metrics=metrics)
 
-    # Auth middleware — reads api_key dynamically from the config registry
-    # so that SIGHUP reloads take effect without rebuilding the app.
-    from .middleware import AuthMiddleware
+    from .middleware.auth import AuthMiddleware
     app.add_middleware(AuthMiddleware)
 
-    # Register routes under /v1
+    # ── Routes ────────────────────────────────────────────────────────────
+
     from .router import router
     app.include_router(router)
 
-    # Health endpoint — at root, not under /v1
-    from proxy.health import _current_report
     @app.get("/health")
     async def health(models: bool = False):
         result = {"status": "ok", "config_loaded": True}
         if models:
+            from proxy.health import _current_report
             report = _current_report()
             result["models"] = {
                 bh.name: {
@@ -159,19 +103,24 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
             }
         return result
 
-    # Metrics endpoint — Prometheus exposition format
-    from fastapi.responses import PlainTextResponse
     @app.get("/metrics", include_in_schema=False)
     async def metrics_endpoint():
+        from fastapi.responses import PlainTextResponse
         return PlainTextResponse(content=metrics.generate())
 
-    # Load plugins after routes are registered (plugins can add their own routes)
+    # ── Plugins ───────────────────────────────────────────────────────────
+
     plugins_dir = config.plugins_dir if config else get().plugins_dir
     if plugins_dir:
         from plugins.manager import load_plugins
         load_plugins(Path(plugins_dir), app)
 
-    # Expose metrics store on app state so middleware can record to it
     app.state.metrics = metrics
 
     return app
+
+
+def _get_metrics_store():
+    """Return the singleton MetricsStore (survives SIGHUP reloads)."""
+    from proxy.metrics import get_metrics_store
+    return get_metrics_store()
