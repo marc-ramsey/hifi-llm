@@ -7,7 +7,8 @@ for auth changes.
 
 from __future__ import annotations
 
-from fastapi import HTTPException, Request
+from fastapi import Request
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import get
@@ -34,6 +35,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         expected = f"Bearer {api_key}"
 
         if auth != expected:
-            raise HTTPException(status_code=401, detail="Invalid or missing API key")
+            return JSONResponse(
+                status_code=401,
+                content={"error": {"message": "Invalid or missing API key", "type": "unauthorized", "param": None, "code": 401}},
+                headers={"Retry-After": "60"},
+            )
 
         return await call_next(request)

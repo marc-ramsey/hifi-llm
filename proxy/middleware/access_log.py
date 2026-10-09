@@ -2,6 +2,7 @@
 
 Logs method, path, status_code, duration_ms, model, and backend for every
 request that passes through the proxy.  Skips /health to avoid log noise.
+Also records metrics for the /metrics endpoint.
 
 Example output::
 
@@ -13,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from typing import Any
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -24,6 +26,10 @@ logger = logging.getLogger("llm-proxy.access")
 
 
 class AccessLogMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, metrics: Any = None) -> None:  # type: ignore[override]
+        super().__init__(app)
+        self._metrics = metrics
+
     async def dispatch(self, request: Request, call_next):
         # Skip health checks — they're noisy and not useful in access logs
         if request.url.path == "/health":
@@ -56,5 +62,9 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
             "model": model,
         }
         logger.info(json.dumps(log_entry, ensure_ascii=False))
+
+        # Record metrics for /metrics endpoint
+        if self._metrics is not None:
+            self._metrics.record_request(request.url.path, status, elapsed_ms)
 
         return response

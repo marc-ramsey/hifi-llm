@@ -1,23 +1,33 @@
 listen:
-  host: 0.0.0.0
-  port: 8080
+  host: 0.0.0.0      # bind address
+  port: 8080          # bind port
 
 auth:
-  api_key: null
+  api_key: null       # set a string to require Bearer token auth
+
+rate_limit:           # per-IP sliding window rate limiting (disabled by default)
+  enabled: false
+  requests_per_minute: 60
+  endpoints:
+    "/v1/chat/completions": 30   # stricter for heavy endpoint
+    "/v1/embeddings": 20
 
 models:
   - name: "fast-agent"
-    url: "http://mothership.local:8081"
+    url: "http://backend:8080"
+    provider: llama.cpp          # display hint for frontends like OWUI
+    backend: openai_compatible   # adapter type selector
+    api_key: null                # optional per-model backend auth token (${VAR} expanded)
     default_params:
       temperature: 0.7
       top_p: 0.95
-      max_tokens: 256
 
   - name: "slow-thinker"
-    url: "http://mothership.local:8082"
+    url: "http://backend:8081"
+    provider: llama.cpp
     default_params:
       temperature: 0.7
       top_p: 0.9
-      max_tokens: 256
 
-plugins_dir: null
+plugins_dir: null               # path to directory with Python plugins
+health_check_interval: 2.0      # seconds between backend health probes

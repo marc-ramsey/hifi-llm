@@ -29,9 +29,10 @@ logger = logging.getLogger("llm-proxy.rate_limit")
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, config) -> None:  # type: ignore[override]
+    def __init__(self, app, config, metrics=None) -> None:  # type: ignore[override]
         super().__init__(app)
         self._config = config
+        self._metrics = metrics
         # ip -> list of request timestamps (seconds since epoch)
         self._counters: dict[str, list[float]] = defaultdict(list)
 
@@ -72,6 +73,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         if len(self._counters[ip]) >= limit:
             logger.warning("Rate limit exceeded for %s on %s (%d/%d)", ip, request.url.path, len(self._counters[ip]), limit)
+            if self._metrics is not None:
+                self._metrics.record_rate_limit(ip)
             return JSONResponse(
                 status_code=429,
                 content={

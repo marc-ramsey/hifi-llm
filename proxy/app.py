@@ -110,10 +110,14 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Metrics store — shared across all app instances (survives reloads)
+    from proxy.metrics import MetricsStore
+    metrics = MetricsStore()
+
     # Rate-limit middleware — per-IP sliding window with per-endpoint overrides
     from .middleware.rate_limit import RateLimitMiddleware
     rate_cfg = config.rate_limit if config else get().rate_limit
-    app.add_middleware(RateLimitMiddleware, config=rate_cfg)
+    app.add_middleware(RateLimitMiddleware, config=rate_cfg, metrics=metrics)
 
     # Request ID middleware — generates UUID per request, injected into
     # response headers and all structured logs for tracing.
@@ -122,7 +126,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
 
     # Access log middleware — structured JSON per-request logging
     from .middleware.access_log import AccessLogMiddleware
-    app.add_middleware(AccessLogMiddleware)
+    app.add_middleware(AccessLogMiddleware, metrics=metrics)
 
     # Auth middleware — reads api_key dynamically from the config registry
     # so that SIGHUP reloads take effect without rebuilding the app.
@@ -152,10 +156,19 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
             }
         return result
 
+    # Metrics endpoint — Prometheus exposition format
+    from fastapi.responses import PlainTextResponse
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics_endpoint():
+        return PlainTextResponse(content=metrics.generate())
+
     # Load plugins after routes are registered (plugins can add their own routes)
     plugins_dir = config.plugins_dir if config else get().plugins_dir
     if plugins_dir:
         from plugins.manager import load_plugins
         load_plugins(Path(plugins_dir), app)
+
+    # Expose metrics store on app state so middleware can record to it
+    app.state.metrics = metrics
 
     return app
