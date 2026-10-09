@@ -15,15 +15,11 @@ from config import get
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, api_key: str | None = None):
-        super().__init__(app)
-        # Store the key from construction time as a fallback.
-        self._api_key = api_key
-
     async def dispatch(self, request: Request, call_next):
-        # Read the current API key from the config registry so that
-        # SIGHUP reloads (which swap _current) take effect immediately.
-        api_key = get().auth.api_key if self._api_key else self._api_key
+        # Read the API key dynamically from the config registry so that
+        # SIGHUP reloads (which swap _current) take effect immediately —
+        # no app rebuild needed for auth changes.
+        api_key = get().auth.api_key
 
         # No key configured — skip auth
         if not api_key:

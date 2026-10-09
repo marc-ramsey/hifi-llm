@@ -57,9 +57,18 @@ def _normalize_delta(delta: dict) -> dict:
 
 
 async def _resolve_and_merge(request: Request):
-    """Resolve model config and merge defaults. Returns (model_config, payload)."""
-    body = await request.json()
-    model_name = body.get("model", "")
+    """Resolve model config and merge defaults. Returns (model_config, payload).
+
+    Caches the parsed body on request.state so middleware can read it without
+    consuming the stream again.
+    """
+    if not hasattr(request.state, "_request_body"):
+        body = await request.json()
+        request.state._request_body = body
+        request.state._model = body.get("model", "")
+    else:
+        body = request.state._request_body
+    model_name = request.state._model
     model_config = _resolve_model_config(model_name)
     payload = _merge_defaults(body, model_config.default_params)
     return model_config, payload
@@ -162,7 +171,12 @@ async def chat_completions(request: Request):
     If stream=true, returns SSE StreamingResponse.
     Otherwise returns JSONResponse with the full body.
     """
-    body = await request.json()
+    # _resolve_and_merge caches the body on request.state on first call;
+    # streaming paths call it directly, non-streaming paths call
+    # _forward_json which calls it — in both cases the body is parsed once.
+    if not hasattr(request.state, "_request_body"):
+        await _resolve_and_merge(request)
+    body = request.state._request_body
     if body.get("stream", False):
         return await _forward_stream(request, "/v1/chat/completions")
     else:
@@ -186,7 +200,9 @@ async def completions(request: Request):
     If stream=true, returns SSE StreamingResponse.
     Otherwise returns JSONResponse with the full body.
     """
-    body = await request.json()
+    if not hasattr(request.state, "_request_body"):
+        await _resolve_and_merge(request)
+    body = request.state._request_body
     if body.get("stream", False):
         return await _forward_stream(request, "/v1/completions")
     else:

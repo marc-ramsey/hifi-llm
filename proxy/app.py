@@ -132,8 +132,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     # Auth middleware — reads api_key dynamically from the config registry
     # so that SIGHUP reloads take effect without rebuilding the app.
     from .middleware import AuthMiddleware
-    auth_cfg = config.auth if config else get().auth
-    app.add_middleware(AuthMiddleware, api_key=auth_cfg.api_key)
+    app.add_middleware(AuthMiddleware)
 
     # Register routes under /v1
     from .router import router

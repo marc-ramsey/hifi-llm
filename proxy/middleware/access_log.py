@@ -39,14 +39,16 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         elapsed_ms = (time.monotonic() - start) * 1000
 
-        # Extract useful fields from the request
-        model = ""
-        backend = ""
-        try:
-            body = await request.json()
-            model = body.get("model", "")
-        except Exception:
-            pass
+        # Extract useful fields from the request.
+        # The body may have been cached by _resolve_and_merge (for /v1/* routes);
+        # fall back to parsing if not yet available.
+        model = getattr(request.state, "_model", None) or ""
+        if not model:
+            try:
+                body = await request.json()
+                model = body.get("model", "")
+            except Exception:
+                pass
 
         # Try to get backend name from the request header set by adapters,
         # or infer from the model config.  For now, just log the path which
