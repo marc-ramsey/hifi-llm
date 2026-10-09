@@ -271,17 +271,18 @@ def restart_health_probe(
     """Stop the current probe and start a new one with updated models.
 
     Used after config reload (SIGHUP) to refresh the model list being probed.
+
+    The old task is cancelled asynchronously — we do NOT block waiting for
+    it to finish.  ``start_health_probe`` immediately creates a fresh task
+    with the new model list, so there is zero gap in probing.
     """
     global _health_task
     old = _health_task
     if old is not None and not old.done():
         old.cancel()
-        try:
-            old.result(timeout=2.0)
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            pass
+        # Do NOT await old.result() here — SIGHUP handlers run on the main
+        # thread and blocking would stall signal processing.  The cancelled
+        # task will exit on its next sleep().
     _health_task = None  # allow start_health_probe to create a fresh task
     start_health_probe(models, interval=interval)
 
