@@ -127,20 +127,30 @@ async def _forward_json(request: Request, endpoint: str) -> JSONResponse:
 
 @router.get("/models")
 async def list_models():
-    """Return the list of configured models in OpenAI format."""
+    """Return the list of configured models in OpenAI format with status."""
+    from proxy.health import _current_report
+
+    report = _current_report()
+    health_map = {bh.name: bh for bh in report.backends}
+
     models = get().models
-    return {
-        "object": "list",
-        "data": [
-            {
-                "id": m.name,
-                "object": "model",
-                "created": 0,
-                "owned_by": m.backend,
-            }
-            for m in models
-        ],
-    }
+    data = []
+    for m in models:
+        entry: dict = {
+            "id": m.name,
+            "object": "model",
+            "created": 0,
+            "owned_by": m.backend,
+        }
+        if m.provider:
+            entry["provider"] = m.provider
+        bh = health_map.get(m.name)
+        if bh:
+            status_value = "loaded" if bh.status.value == "healthy" else "unloaded"
+            entry["status"] = {"value": status_value}
+        data.append(entry)
+
+    return {"object": "list", "data": data}
 
 
 # ── POST /v1/chat/completions ───────────────────────────────────────────────

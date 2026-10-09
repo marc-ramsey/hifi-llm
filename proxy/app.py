@@ -11,6 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+import asyncio
+
 from config import ProxyConfig, get, set
 
 
@@ -19,10 +21,18 @@ logger = logging.getLogger(__name__)
 
 def create_app(config: ProxyConfig | None = None) -> FastAPI:
     """Create and configure the FastAPI application."""
+
+    async def _lifespan(app):
+        from proxy.health import start_health_probe, _deferred_models
+        if _deferred_models is not None:
+            start_health_probe(_deferred_models)
+        yield
+
     app = FastAPI(
         title="Simple LLM Proxy",
         description="OpenAI-compatible reverse proxy for multiple LLM backends",
         version="0.1.0",
+        lifespan=_lifespan,
     )
 
     # Convert BackendError (from adapters) into OpenAI-style 502 responses
@@ -76,15 +86,35 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     app.include_router(router)
 
     # Health endpoint — at root, not under /v1
-    from config import get
+    from proxy.health import _current_report
     @app.get("/health")
-    async def health():
-        return {"status": "ok", "config_loaded": True}
+    async def health(models: bool = False):
+        result = {"status": "ok", "config_loaded": True}
+        if models:
+            report = _current_report()
+            result["models"] = {
+                bh.name: {
+                    "status": bh.status.value,
+                    "error": bh.error,
+                    "latency_ms": bh.latency_ms,
+                    "model_count": bh.model_count,
+                }
+                for bh in report.backends
+            }
+        return result
+
+    # Start periodic health probe task
+    from proxy.health import start_health_probe, stop_health_probe
+    interval = config.health_check_interval if config else 2.0
+    start_health_probe(config.models, interval=interval)
 
     # Load plugins after routes are registered (plugins can add their own routes)
     plugins_dir = config.plugins_dir if config else get().plugins_dir
     if plugins_dir:
         from plugins.manager import load_plugins
         load_plugins(Path(plugins_dir), app)
+
+    # Store cleanup hook on the app for graceful shutdown
+    app.state.stop_health_probe = stop_health_probe
 
     return app

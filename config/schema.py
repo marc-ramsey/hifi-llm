@@ -22,6 +22,7 @@ class ModelConfig(BaseModel):
     name: str
     url: str
     backend: str = "openai_compatible"  # adapter type selector
+    provider: str | None = None  # OWUI provider hint (e.g. "llama.cpp")
     default_params: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("url")
@@ -37,6 +38,7 @@ class ProxyConfig(BaseModel):
     auth: AuthConfig = Field(default_factory=AuthConfig)
     models: list[ModelConfig] = Field(default_factory=list)
     plugins_dir: Path | None = None
+    health_check_interval: float = Field(default=2.0, gt=0, description="Seconds between backend health probes")
 
     @field_validator("models")
     @classmethod

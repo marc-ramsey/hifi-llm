@@ -12,6 +12,7 @@ import uvicorn
 from config import ProxyConfig, get, set
 from config.loader import load_config, resolve_config_path
 from proxy.app import create_app
+from proxy.health import collect_health, log_health_report, stop_health_probe
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,9 +25,20 @@ _server: uvicorn.Server | None = None
 
 
 def _load_config(path: str | None = None) -> ProxyConfig:
-    """Load and validate config, set in registry."""
+    """Load and validate config, set in registry. Probe backends after loading."""
     config = load_config(path)
     set(config)
+
+    # Probe all backends and log status
+    report = asyncio.run(collect_health(config.models, timeout=2.0))
+    log_health_report(report)
+
+    if report.any_unhealthy:
+        logger.warning(
+            "%d/%d backends unhealthy — proxy running in degraded mode",
+            report.unhealthy_count, report.total,
+        )
+
     return config
 
 
@@ -82,7 +94,11 @@ def run(config_path: str | None = None) -> None:
 
     # Run server — asyncio.run manages the event loop lifecycle cleanly.
     # Uvicorn's serve() handles SIGINT/SIGTERM internally (capture_signals).
-    asyncio.run(_server.serve())
+    try:
+        asyncio.run(_server.serve())
+    finally:
+        # Cancel the periodic health probe task on shutdown
+        stop_health_probe()
 
     logger.info("Shutdown complete")
 
