@@ -17,6 +17,15 @@ class AuthConfig(BaseModel):
     api_key: str | None = None
 
 
+class RateLimitConfig(BaseModel):
+    enabled: bool = False
+    requests_per_minute: int = Field(default=60, ge=1)
+    endpoints: dict[str, int] = Field(
+        default_factory=dict,
+        description="Per-endpoint override (requests per minute). Keys are URL paths.",
+    )
+
+
 class ModelConfig(BaseModel):
     """One model entry — the `name` is the sole identifier.
 
@@ -49,6 +58,7 @@ class ModelConfig(BaseModel):
 class ProxyConfig(BaseModel):
     listen: ListenConfig = Field(default_factory=ListenConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
+    rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
     models: list[ModelConfig] = Field(default_factory=list)
     plugins_dir: Path | None = None
     health_check_interval: float = Field(default=2.0, gt=0, description="Seconds between backend health probes")

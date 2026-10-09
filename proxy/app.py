@@ -110,6 +110,11 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Rate-limit middleware — per-IP sliding window with per-endpoint overrides
+    from .middleware.rate_limit import RateLimitMiddleware
+    rate_cfg = config.rate_limit if config else get().rate_limit
+    app.add_middleware(RateLimitMiddleware, config=rate_cfg)
+
     # Request ID middleware — generates UUID per request, injected into
     # response headers and all structured logs for tracing.
     from .middleware.request_id import RequestIDMiddleware
