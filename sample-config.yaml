@@ -35,6 +35,20 @@ models:
       temperature: 0.7
       top_p: 0.9
 
+# ── Managed local model ───────────────────────────────────────────────
+# backend: managed_llama — HiFi launches and manages the server process.
+# The server starts lazily on first request, auto-restarts on death.
+# server_config keys are mapped to --kebab-case CLI flags at launch.
+
+  - name: "local-llama"
+    url: "http://127.0.0.1:8080"
+    backend: managed_llama
+    llama_binary: "/usr/local/bin/llama-server"  # or just "llama-server" if on PATH
+    server_config:
+      ctx_size: 4096
+      n_gpu_layers: 99
+      threads: 8
+
 # ── Static file serving ───────────────────────────────────────────────
 # Serve files from filesystem directories at configured URL paths.
 # Multiple directories per path are supported (first match wins).

@@ -11,6 +11,7 @@ from config import ProxyConfig, get, set
 from config.loader import load_config, resolve_config_path
 from proxy.health import restart_health_probe, stop_health_probe
 from adapters.base import close_http_client
+from proxy.process_manager import ProcessManager
 from proxy.reloadable import ConfigReloadableApp
 
 logging.basicConfig(
@@ -106,6 +107,7 @@ def run(config_path: str | None = None) -> None:
     finally:
         # Cancel the periodic health probe task and close HTTP connections
         stop_health_probe()
+        ProcessManager.shutdown()
         close_http_client()
 
     logger.info("Shutdown complete")

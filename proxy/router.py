@@ -86,7 +86,11 @@ async def _forward_stream(request: Request, endpoint: str) -> StreamingResponse:
     """
     model_config, payload = await _resolve_and_merge(request)
 
-    adapter = get_adapter(model_config.backend, api_key=model_config.api_key)
+    adapter = get_adapter(
+        model_config.backend,
+        api_key=model_config.api_key,
+        model_config=model_config,
+    )
     stream = adapter.forward_stream(
         url=model_config.url,
         endpoint=endpoint,
@@ -109,7 +113,11 @@ async def _forward_json(request: Request, endpoint: str) -> JSONResponse:
     """Generic JSON proxy for any endpoint."""
     model_config, payload = await _resolve_and_merge(request)
 
-    adapter = get_adapter(model_config.backend, api_key=model_config.api_key)
+    adapter = get_adapter(
+        model_config.backend,
+        api_key=model_config.api_key,
+        model_config=model_config,
+    )
     response = await adapter.forward_json(
         url=model_config.url,
         endpoint=endpoint,

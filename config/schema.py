@@ -41,8 +41,9 @@ class ModelConfig(BaseModel):
     Fields:
         name: Unique model name (used as the OpenAI `model` identifier).
         url: Backend server URL.
-        backend: Adapter type selector (e.g. "llama_cpp", "openai_compatible").
-                 Determines how requests are forwarded and responses normalised.
+        backend: Adapter type selector (e.g. "llama_cpp", "openai_compatible",
+                 "managed_llama"). Determines how requests are forwarded and
+                 responses normalised.
         provider: Optional display hint for frontends like Open WebUI
                   (e.g. "llama.cpp"). Does NOT affect routing — use `backend`
                   for that.
@@ -50,6 +51,11 @@ class ModelConfig(BaseModel):
         default_params: Default sampling parameters merged into each request.
         verify_ssl: Whether to verify the backend's TLS certificate
                     (default True; set False for self-signed certs).
+        llama_binary: Path or name of the llama-server binary. Required when
+                      ``backend`` is ``managed_llama``.
+        server_config: Server-level configuration in snake_case keys, mapped
+                       to llama-server CLI flags at launch time
+                       (e.g. {"ctx_size": 4096} → --ctx-size 4096).
     """
     name: str
     url: str
@@ -58,12 +64,21 @@ class ModelConfig(BaseModel):
     api_key: str | None = None  # per-model backend auth token (${VAR} expanded)
     default_params: dict[str, Any] = Field(default_factory=dict)
     verify_ssl: bool = True  # TLS certificate verification
+    llama_binary: str | None = None  # path to llama-server binary
+    server_config: dict[str, Any] = Field(default_factory=dict)  # mapped to CLI flags
 
     @field_validator("url")
     @classmethod
     def validate_url(cls, v: str) -> str:
         if not v.startswith(("http://", "https://")):
             raise ValueError("url must start with http:// or https://")
+        return v
+
+    @field_validator("llama_binary")
+    @classmethod
+    def validate_llama_binary(cls, v: str | None, info) -> str | None:
+        if info.data.get("backend") == "managed_llama" and not v:
+            raise ValueError("llama_binary is required when backend is 'managed_llama'")
         return v
 
 
