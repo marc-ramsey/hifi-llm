@@ -117,7 +117,13 @@ def run(config_path: str | None = None) -> None:
                 return_exceptions=True,
             )
 
-    asyncio.run(_serve_and_cleanup())
+    try:
+        asyncio.run(_serve_and_cleanup())
+    except KeyboardInterrupt:
+        # asyncio.run() re-raises KeyboardInterrupt from CancelledError
+        # during cleanup; the shutdown already completed in the finally
+        # block above, so this is expected on ^C.
+        pass
 
     logger.info("Shutdown complete")
 
