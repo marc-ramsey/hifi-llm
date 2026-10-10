@@ -149,6 +149,46 @@ def _find_free_port() -> int:
     return port
 
 
+def _start_proxy(port: int, config_path: Path, cwd: Path = ROOT) -> subprocess.Popen:
+    """Start the hifi proxy as a subprocess and wait for it to be ready.
+
+    Returns the ``Popen`` instance.  On failure the process is killed and
+    ``pytest.fail`` is called with stdout so the error is visible in test output.
+    """
+    env = os.environ.copy()
+    env["LLM_PROXY_TIMEOUT_MS"] = "60000"
+
+    venv_python = cwd / ".venv" / "bin" / "python3"
+    python_bin = str(venv_python) if venv_python.exists() else sys.executable
+
+    proc = subprocess.Popen(
+        [python_bin, str(cwd / "main.py"), "--config", str(config_path)],
+        cwd=str(cwd),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+    # Wait for server to be ready (up to 30s)
+    ready = False
+    for _ in range(60):
+        try:
+            r = requests.get(f"http://127.0.0.1:{port}/health", timeout=2)
+            if r.status_code == 200:
+                ready = True
+                break
+        except Exception:
+            time.sleep(0.5)
+
+    if not ready:
+        proc.kill()
+        stdout, _ = proc.communicate(timeout=5)
+        pytest.fail(f"Proxy failed to start.\nstdout:\n{stdout}")
+
+    return proc
+
+
 # ────────────────────────────────────────────────────────────────────────
 # Fixtures
 # ────────────────────────────────────────────────────────────────────────
@@ -224,39 +264,7 @@ static_files: []
 """
     )
 
-    env = os.environ.copy()
-    env["LLM_PROXY_TIMEOUT_MS"] = "60000"
-
-    # Use the venv Python if available so the subprocess has access to
-    # installed dependencies regardless of whether the test runner is
-    # activated into the venv.
-    venv_python = ROOT / ".venv" / "bin" / "python3"
-    python_bin = str(venv_python) if venv_python.exists() else sys.executable
-
-    proc = subprocess.Popen(
-        [python_bin, str(ROOT / "main.py"), "--config", str(config_path)],
-        cwd=str(ROOT),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-
-    # Wait for server to be ready (up to 30s)
-    ready = False
-    for _ in range(60):
-        try:
-            r = requests.get(f"http://127.0.0.1:{port}/health", timeout=2)
-            if r.status_code == 200:
-                ready = True
-                break
-        except Exception:
-            time.sleep(0.5)
-
-    if not ready:
-        proc.kill()
-        stdout, _ = proc.communicate(timeout=5)
-        pytest.fail(f"Proxy failed to start.\nstdout:\n{stdout}")
+    proc = _start_proxy(port, config_path)
 
     yield port, proc
 
@@ -323,36 +331,7 @@ static_files:
 """
     )
 
-    env = os.environ.copy()
-    env["LLM_PROXY_TIMEOUT_MS"] = "60000"
-
-    venv_python = ROOT / ".venv" / "bin" / "python3"
-    python_bin = str(venv_python) if venv_python.exists() else sys.executable
-
-    proc = subprocess.Popen(
-        [python_bin, str(ROOT / "main.py"), "--config", str(config_path)],
-        cwd=str(ROOT),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-
-    # Wait for server to be ready (up to 30s)
-    ready = False
-    for _ in range(60):
-        try:
-            r = requests.get(f"http://127.0.0.1:{port}/health", timeout=2)
-            if r.status_code == 200:
-                ready = True
-                break
-        except Exception:
-            time.sleep(0.5)
-
-    if not ready:
-        proc.kill()
-        stdout, _ = proc.communicate(timeout=5)
-        pytest.fail(f"Proxy with static files failed to start.\nstdout:\n{stdout}")
+    proc = _start_proxy(port, config_path)
 
     yield port, proc
 

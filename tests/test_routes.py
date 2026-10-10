@@ -5,6 +5,8 @@ Tests against a real threaded HTTP backend server via the proxy.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from .conftest import ROOT
@@ -45,7 +47,6 @@ def _parse_sse_chunks(raw_text):
             if data == "[DONE]":
                 return chunks, True
             try:
-                import json
                 chunks.append(json.loads(data))
             except ValueError:
                 pass

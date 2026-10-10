@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import logging
 
-
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from config import get
 from adapters import get_adapter
+from proxy.health import _current_report
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +124,6 @@ async def _forward_json(request: Request, endpoint: str) -> JSONResponse:
 @router.get("/models")
 async def list_models():
     """Return the list of configured models in OpenAI format with status."""
-    from proxy.health import _current_report
 
     report = _current_report()
     health_map = {bh.name: bh for bh in report.backends}

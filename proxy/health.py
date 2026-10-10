@@ -62,6 +62,11 @@ STARTUP_TIMEOUT = httpx.Timeout(
 )
 
 
+def _elapsed_ms(start: float) -> float:
+    """Return elapsed milliseconds since *start* (time.monotonic)."""
+    return (time.monotonic() - start) * 1000
+
+
 def _make_timeout(timeout: float | httpx.Timeout) -> httpx.Timeout:
     """Normalise a timeout value to an httpx.Timeout.
 
@@ -87,7 +92,7 @@ async def _probe_single(
     start = time.monotonic()
     try:
         resp = await client.get(f"{url}/v1/models", timeout=_make_timeout(timeout), verify=verify_ssl)
-        elapsed_ms = (time.monotonic() - start) * 1000
+        elapsed_ms = _elapsed_ms(start)
 
         if resp.status_code == 200:
             body = resp.json()
@@ -113,16 +118,14 @@ async def _probe_single(
             )
 
     except httpx.TimeoutException:
-        elapsed_ms = (time.monotonic() - start) * 1000
         return BackendHealth(name=name, url=url, status=HealthStatus.UNHEALTHY,
-                             error="timeout", latency_ms=elapsed_ms)
+                             error="timeout", latency_ms=_elapsed_ms(start))
     except httpx.ConnectError as e:
         return BackendHealth(name=name, url=url, status=HealthStatus.UNHEALTHY,
                              error=f"connection refused: {e}")
     except Exception as e:
-        elapsed_ms = (time.monotonic() - start) * 1000
         return BackendHealth(name=name, url=url, status=HealthStatus.UNHEALTHY,
-                             error=str(e), latency_ms=elapsed_ms)
+                             error=str(e), latency_ms=_elapsed_ms(start))
 
 
 async def collect_health(

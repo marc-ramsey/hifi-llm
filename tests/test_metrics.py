@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 import requests
 
 
@@ -51,8 +53,6 @@ class TestRequestID:
         """Every response should include X-Request-ID header."""
         resp = client.get("/health")
         assert "X-Request-ID" in resp.headers
-        # Should be a valid UUID format
-        import uuid
         uuid.UUID(resp.headers["X-Request-ID"])
 
     def test_x_request_id_different_per_request(self, client):

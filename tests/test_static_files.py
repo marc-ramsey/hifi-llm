@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
-
 import requests
 
 
@@ -68,11 +65,7 @@ class TestStaticFilesInvalidConfig:
 
     def test_nonexistent_directory_skipped(self, proxy_config_dir, backend_url):
         """A config referencing a non-existent directory is skipped with a warning; proxy still starts."""
-        import subprocess
-        import sys
-        import os
-        import time
-        from tests.conftest import _find_free_port, ROOT
+        from tests.conftest import _find_free_port, _start_proxy, ROOT
 
         port = _find_free_port()
         config_path = proxy_config_dir / "proxy-config.yaml"
@@ -97,32 +90,7 @@ static_files:
 """
         )
 
-        env = os.environ.copy()
-        venv_python = ROOT / ".venv" / "bin" / "python3"
-        python_bin = str(venv_python) if venv_python.exists() else sys.executable
-
-        proc = subprocess.Popen(
-            [python_bin, str(ROOT / "main.py"), "--config", str(config_path)],
-            cwd=str(ROOT),
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-
-        # Wait for proxy to start (it should, skipping the missing dir)
-        ready = False
-        for _ in range(30):
-            try:
-                r = requests.get(f"http://127.0.0.1:{port}/health", timeout=2)
-                if r.status_code == 200:
-                    ready = True
-                    break
-            except Exception:
-                pass
-            time.sleep(0.5)
-
-        assert ready, "Proxy should start even with nonexistent static directory (skips it)"
+        proc = _start_proxy(port, config_path)
 
         # Verify the proxy is functional
         resp = requests.get(f"http://127.0.0.1:{port}/v1/models")

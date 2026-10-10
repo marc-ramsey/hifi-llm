@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import ProxyConfig, get
@@ -106,7 +106,6 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
 
     @app.get("/metrics", include_in_schema=False)
     async def metrics_endpoint():
-        from fastapi.responses import PlainTextResponse
         return PlainTextResponse(content=metrics.generate())
 
     # ── Static file serving ───────────────────────────────────────────────
