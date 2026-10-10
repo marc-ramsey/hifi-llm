@@ -39,12 +39,25 @@ def _resolve_model_config(model_name: str):
     )
 
 
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Recursively merge *override* into *base*, merging nested dicts."""
+    result = {**base}
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
 def _merge_defaults(payload: dict, defaults: dict) -> dict:
     """Merge default_params into the request payload.
-    Client values override defaults.
+
+    Client values override defaults.  Nested dicts (e.g. ``logit_bias``,
+    ``response_format``) are merged recursively so that client keys don't
+    silently replace the entire default structure.
     """
-    merged = {**defaults, **payload}
-    return merged
+    return _deep_merge(defaults, payload)
 
 
 async def _resolve_and_merge(request: Request):
