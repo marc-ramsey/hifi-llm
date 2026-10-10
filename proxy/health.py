@@ -57,11 +57,12 @@ async def _probe_single(
     name: str,
     url: str,
     timeout: float,
+    verify_ssl: bool = True,
 ) -> BackendHealth:
     """Probe a single backend and return its health state."""
     start = time.monotonic()
     try:
-        resp = await client.get(f"{url}/v1/models", timeout=timeout)
+        resp = await client.get(f"{url}/v1/models", timeout=timeout, verify=verify_ssl)
         elapsed_ms = (time.monotonic() - start) * 1000
 
         if resp.status_code == 200:
@@ -119,7 +120,7 @@ async def collect_health(
         return HealthReport()
 
     async with httpx.AsyncClient(timeout=timeout) as client:
-        tasks = [_probe_single(client, m.name, m.url, timeout) for m in models]
+        tasks = [_probe_single(client, m.name, m.url, timeout, verify_ssl=m.verify_ssl) for m in models]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
     backends = []

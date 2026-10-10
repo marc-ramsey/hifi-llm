@@ -47,6 +47,8 @@ class ModelConfig(BaseModel):
                   for that.
         api_key: Optional per-model backend auth token (${VAR} expanded).
         default_params: Default sampling parameters merged into each request.
+        verify_ssl: Whether to verify the backend's TLS certificate
+                    (default True; set False for self-signed certs).
     """
     name: str
     url: str
@@ -54,6 +56,7 @@ class ModelConfig(BaseModel):
     provider: str | None = None  # OWUI provider hint (e.g. "llama.cpp")
     api_key: str | None = None  # per-model backend auth token (${VAR} expanded)
     default_params: dict[str, Any] = Field(default_factory=dict)
+    verify_ssl: bool = True  # TLS certificate verification
 
     @field_validator("url")
     @classmethod

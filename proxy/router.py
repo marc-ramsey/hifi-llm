@@ -78,6 +78,7 @@ async def _forward_stream(request: Request, endpoint: str) -> StreamingResponse:
         url=model_config.url,
         endpoint=endpoint,
         payload=payload,
+        verify_ssl=model_config.verify_ssl,
     )
 
     return StreamingResponse(
@@ -100,6 +101,7 @@ async def _forward_json(request: Request, endpoint: str) -> JSONResponse:
         url=model_config.url,
         endpoint=endpoint,
         payload=payload,
+        verify_ssl=model_config.verify_ssl,
     )
     return JSONResponse(content=response)
 

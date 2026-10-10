@@ -30,6 +30,7 @@ class BaseAdapter(abc.ABC):
         payload: dict[str, Any],
         api_key: str | None = None,
         timeout_ms: int = TIMEOUT,
+        verify_ssl: bool = True,
     ) -> AsyncIterator[bytes]:
         """Yield raw SSE bytes from the backend. Never raises."""
         ...
@@ -42,6 +43,7 @@ class BaseAdapter(abc.ABC):
         payload: dict[str, Any],
         api_key: str | None = None,
         timeout_ms: int = TIMEOUT,
+        verify_ssl: bool = True,
     ) -> dict[str, Any]:
         """Return the full JSON response body."""
         ...
@@ -59,6 +61,11 @@ _HTTP_CLIENT = httpx.AsyncClient(
     timeout=120.0,
     limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
 )
+
+
+def close_http_client() -> None:
+    """Close the shared HTTP client and drain keep-alive connections."""
+    _HTTP_CLIENT.aclose()
 
 
 class OpenAICompatibleAdapter(BaseAdapter):
@@ -93,6 +100,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
         payload: dict[str, Any],
         api_key: str | None = None,
         timeout_ms: int = TIMEOUT,
+        verify_ssl: bool = True,
     ) -> AsyncIterator[bytes]:
         """Stream response bytes transparently. Never raises."""
         key = api_key or self._api_key
@@ -100,12 +108,18 @@ class OpenAICompatibleAdapter(BaseAdapter):
         if key:
             headers["Authorization"] = f"Bearer {key}"
 
+        client = _HTTP_CLIENT if verify_ssl else httpx.AsyncClient(
+            timeout=120.0,
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+            verify=False,
+        )
+
         try:
-            async with _HTTP_CLIENT.stream(
+            use_close = not verify_ssl
+            async with client.stream(
                 "POST", f"{url}{endpoint}", json=payload, headers=headers,
                 timeout=timeout_ms / 1000,
             ) as resp:
-                # Check status BEFORE streaming — catches immediate errors
                 if resp.status_code >= 400:
                     error_body = await resp.aread()
                     msg = error_body.decode("utf-8", errors="replace")[:500]
@@ -119,6 +133,9 @@ class OpenAICompatibleAdapter(BaseAdapter):
             yield self._error_sse(502, f"Backend unreachable: {e}")
         except httpx.HTTPError as e:
             yield self._error_sse(502, str(e))
+        finally:
+            if use_close:
+                await client.aclose()
 
     async def forward_json(
         self,
@@ -127,6 +144,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
         payload: dict[str, Any],
         api_key: str | None = None,
         timeout_ms: int = TIMEOUT,
+        verify_ssl: bool = True,
     ) -> dict[str, Any]:
         """Return the full JSON response."""
         key = api_key or self._api_key
@@ -134,15 +152,25 @@ class OpenAICompatibleAdapter(BaseAdapter):
         if key:
             headers["Authorization"] = f"Bearer {key}"
 
-        resp = await _HTTP_CLIENT.post(
-            f"{url}{endpoint}", json=payload, headers=headers,
-            timeout=timeout_ms / 1000,
+        client = _HTTP_CLIENT if verify_ssl else httpx.AsyncClient(
+            timeout=120.0,
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+            verify=False,
         )
-        if resp.status_code >= 400:
-            try:
-                body = resp.json()
-                msg = body.get("error", {}).get("message", resp.text[:200])
-            except Exception:
-                msg = resp.text[:500]
-            raise BackendError(resp.status_code, msg)
-        return resp.json()
+
+        try:
+            resp = await client.post(
+                f"{url}{endpoint}", json=payload, headers=headers,
+                timeout=timeout_ms / 1000,
+            )
+            if resp.status_code >= 400:
+                try:
+                    body = resp.json()
+                    msg = body.get("error", {}).get("message", resp.text[:200])
+                except Exception:
+                    msg = resp.text[:500]
+                raise BackendError(resp.status_code, msg)
+            return resp.json()
+        finally:
+            if not verify_ssl:
+                await client.aclose()

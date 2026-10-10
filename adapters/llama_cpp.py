@@ -50,6 +50,7 @@ class LlamaCppAdapter(BaseAdapter):
         payload: dict[str, Any],
         api_key: str | None = None,
         timeout_ms: int = 120000,
+        verify_ssl: bool = True,
     ) -> AsyncIterator[bytes]:
         """Stream response bytes transparently with llama.cpp headers. Never raises."""
         key = api_key or self._api_key
@@ -60,8 +61,15 @@ class LlamaCppAdapter(BaseAdapter):
         if key:
             headers["Authorization"] = f"Bearer {key}"
 
+        client = _HTTP_CLIENT if verify_ssl else httpx.AsyncClient(
+            timeout=120.0,
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+            verify=False,
+        )
+
         try:
-            async with _HTTP_CLIENT.stream(
+            use_close = not verify_ssl
+            async with client.stream(
                 "POST", f"{url}{endpoint}", json=payload, headers=headers,
                 timeout=timeout_ms / 1000,
             ) as resp:
@@ -78,6 +86,9 @@ class LlamaCppAdapter(BaseAdapter):
             yield self._error_sse(502, f"Backend unreachable: {e}")
         except httpx.HTTPError as e:
             yield self._error_sse(502, str(e))
+        finally:
+            if use_close:
+                await client.aclose()
 
     async def forward_json(
         self,
@@ -86,6 +97,7 @@ class LlamaCppAdapter(BaseAdapter):
         payload: dict[str, Any],
         api_key: str | None = None,
         timeout_ms: int = 120000,
+        verify_ssl: bool = True,
     ) -> dict[str, Any]:
         """Return the full JSON response, normalising llama-server output."""
         key = api_key or self._api_key
@@ -96,21 +108,31 @@ class LlamaCppAdapter(BaseAdapter):
         if key:
             headers["Authorization"] = f"Bearer {key}"
 
-        resp = await _HTTP_CLIENT.post(
-            f"{url}{endpoint}", json=payload, headers=headers,
-            timeout=timeout_ms / 1000,
+        client = _HTTP_CLIENT if verify_ssl else httpx.AsyncClient(
+            timeout=120.0,
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+            verify=False,
         )
-        if resp.status_code >= 400:
-            try:
-                body = resp.json()
-                msg = body.get("error", {}).get("message", resp.text[:200])
-            except Exception:
-                msg = resp.text[:500]
-            raise BackendError(resp.status_code, msg)
 
-        data = resp.json()
-        data = self._normalise_response(data)
-        return data
+        try:
+            resp = await client.post(
+                f"{url}{endpoint}", json=payload, headers=headers,
+                timeout=timeout_ms / 1000,
+            )
+            if resp.status_code >= 400:
+                try:
+                    body = resp.json()
+                    msg = body.get("error", {}).get("message", resp.text[:200])
+                except Exception:
+                    msg = resp.text[:500]
+                raise BackendError(resp.status_code, msg)
+
+            data = resp.json()
+            data = self._normalise_response(data)
+            return data
+        finally:
+            if not verify_ssl:
+                await client.aclose()
 
     def _normalise_response(self, data: dict[str, Any]) -> dict[str, Any]:
         """Normalise llama-server non-streaming response to OpenAI-compatible shape."""
