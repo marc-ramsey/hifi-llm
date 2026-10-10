@@ -19,7 +19,7 @@ Metrics exposed::
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
+from collections import defaultdict, deque
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +47,9 @@ class MetricsStore:
     def __init__(self) -> None:
         # path + status -> count
         self._request_counts: dict[tuple[str, str], int] = defaultdict(int)
-        # path -> list of durations in seconds
-        self._durations: dict[str, list[float]] = defaultdict(list)
+        # path -> ring buffer of recent durations (last N per path)
+        self._max_durations = 10_000  # per-path ring buffer size
+        self._durations: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=self._max_durations))
         # ip -> rate-limit hit count
         self._rate_limit_counts: dict[str, int] = defaultdict(int)
         # Track total requests for cleanup
