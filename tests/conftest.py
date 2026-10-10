@@ -284,6 +284,87 @@ def client(proxy):
     return s
 
 
+@pytest.fixture(scope="session")
+def proxy_with_static(proxy_config_dir, backend_url):
+    """Start the hifi proxy with static file serving enabled.
+
+    Serves ./tests/fixtures/static_docs at /docs and
+    ./tests/fixtures/assets at /assets.
+
+    Yields (port, proc).  Teardown after the session.
+    """
+    port = _find_free_port()
+
+    config_path = proxy_config_dir / "proxy-config-static.yaml"
+    config_path.write_text(
+        f"""
+listen:
+  host: 0.0.0.0
+  port: {port}
+
+auth:
+  api_key: null
+
+models:
+  - name: "gemma-4-26B-instruct"
+    url: "{backend_url}"
+    default_params:
+      temperature: 0.7
+      top_p: 0.95
+      max_tokens: 256
+
+static_files:
+  - path: "/docs"
+    directories:
+      - {ROOT / "tests/fixtures/static_docs"}
+  - path: "/assets"
+    directories:
+      - {ROOT / "tests/fixtures/assets"}
+"""
+    )
+
+    env = os.environ.copy()
+    env["LLM_PROXY_TIMEOUT_MS"] = "60000"
+
+    venv_python = ROOT / ".venv" / "bin" / "python3"
+    python_bin = str(venv_python) if venv_python.exists() else sys.executable
+
+    proc = subprocess.Popen(
+        [python_bin, str(ROOT / "main.py"), "--config", str(config_path)],
+        cwd=str(ROOT),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+    # Wait for server to be ready (up to 30s)
+    ready = False
+    for _ in range(60):
+        try:
+            r = requests.get(f"http://127.0.0.1:{port}/health", timeout=2)
+            if r.status_code == 200:
+                ready = True
+                break
+        except Exception:
+            time.sleep(0.5)
+
+    if not ready:
+        proc.kill()
+        stdout, _ = proc.communicate(timeout=5)
+        pytest.fail(f"Proxy with static files failed to start.\nstdout:\n{stdout}")
+
+    yield port, proc
+
+    # Teardown
+    proc.terminate()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
 @pytest.fixture
 def write_config(proxy_config_dir):
     """Write a YAML config file and return its path."""
