@@ -16,7 +16,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from .base import _HTTP_CLIENT, BaseAdapter, BackendError
+from .base import _HTTP_CLIENT, _SSL_UNVERIFIED_CLIENT, BaseAdapter, BackendError
 
 logger = logging.getLogger(__name__)
 
@@ -61,14 +61,9 @@ class LlamaCppAdapter(BaseAdapter):
         if key:
             headers["Authorization"] = f"Bearer {key}"
 
-        client = _HTTP_CLIENT if verify_ssl else httpx.AsyncClient(
-            timeout=120.0,
-            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
-            verify=False,
-        )
+        client = _HTTP_CLIENT if verify_ssl else _SSL_UNVERIFIED_CLIENT
 
         try:
-            use_close = not verify_ssl
             async with client.stream(
                 "POST", f"{url}{endpoint}", json=payload, headers=headers,
                 timeout=timeout_ms / 1000,
@@ -86,9 +81,6 @@ class LlamaCppAdapter(BaseAdapter):
             yield self._error_sse(502, f"Backend unreachable: {e}")
         except httpx.HTTPError as e:
             yield self._error_sse(502, str(e))
-        finally:
-            if use_close:
-                await client.aclose()
 
     async def forward_json(
         self,
@@ -108,31 +100,23 @@ class LlamaCppAdapter(BaseAdapter):
         if key:
             headers["Authorization"] = f"Bearer {key}"
 
-        client = _HTTP_CLIENT if verify_ssl else httpx.AsyncClient(
-            timeout=120.0,
-            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
-            verify=False,
+        client = _HTTP_CLIENT if verify_ssl else _SSL_UNVERIFIED_CLIENT
+
+        resp = await client.post(
+            f"{url}{endpoint}", json=payload, headers=headers,
+            timeout=timeout_ms / 1000,
         )
+        if resp.status_code >= 400:
+            try:
+                body = resp.json()
+                msg = body.get("error", {}).get("message", resp.text[:200])
+            except Exception:
+                msg = resp.text[:500]
+            raise BackendError(resp.status_code, msg)
 
-        try:
-            resp = await client.post(
-                f"{url}{endpoint}", json=payload, headers=headers,
-                timeout=timeout_ms / 1000,
-            )
-            if resp.status_code >= 400:
-                try:
-                    body = resp.json()
-                    msg = body.get("error", {}).get("message", resp.text[:200])
-                except Exception:
-                    msg = resp.text[:500]
-                raise BackendError(resp.status_code, msg)
-
-            data = resp.json()
-            data = self._normalise_response(data)
-            return data
-        finally:
-            if not verify_ssl:
-                await client.aclose()
+        data = resp.json()
+        data = self._normalise_response(data)
+        return data
 
     def _normalise_response(self, data: dict[str, Any]) -> dict[str, Any]:
         """Normalise llama-server non-streaming response to OpenAI-compatible shape."""

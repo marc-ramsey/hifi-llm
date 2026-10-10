@@ -62,15 +62,22 @@ _HTTP_CLIENT = httpx.AsyncClient(
     limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
 )
 
+_SSL_UNVERIFIED_CLIENT = httpx.AsyncClient(
+    timeout=120.0,
+    limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+    verify=False,
+)
+
 
 def close_http_client() -> None:
-    """Close the shared HTTP client and drain keep-alive connections.
+    """Close all shared HTTP clients and drain keep-alive connections.
 
     Runs synchronously — calls .close() which does NOT await, so any
     pending coroutines are discarded. This is safe at shutdown since
     no more requests will be made.
     """
     _HTTP_CLIENT.close()
+    _SSL_UNVERIFIED_CLIENT.close()
 
 
 class OpenAICompatibleAdapter(BaseAdapter):
@@ -113,14 +120,9 @@ class OpenAICompatibleAdapter(BaseAdapter):
         if key:
             headers["Authorization"] = f"Bearer {key}"
 
-        client = _HTTP_CLIENT if verify_ssl else httpx.AsyncClient(
-            timeout=120.0,
-            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
-            verify=False,
-        )
+        client = _HTTP_CLIENT if verify_ssl else _SSL_UNVERIFIED_CLIENT
 
         try:
-            use_close = not verify_ssl
             async with client.stream(
                 "POST", f"{url}{endpoint}", json=payload, headers=headers,
                 timeout=timeout_ms / 1000,
@@ -138,9 +140,6 @@ class OpenAICompatibleAdapter(BaseAdapter):
             yield self._error_sse(502, f"Backend unreachable: {e}")
         except httpx.HTTPError as e:
             yield self._error_sse(502, str(e))
-        finally:
-            if use_close:
-                await client.aclose()
 
     async def forward_json(
         self,
@@ -157,25 +156,17 @@ class OpenAICompatibleAdapter(BaseAdapter):
         if key:
             headers["Authorization"] = f"Bearer {key}"
 
-        client = _HTTP_CLIENT if verify_ssl else httpx.AsyncClient(
-            timeout=120.0,
-            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
-            verify=False,
-        )
+        client = _HTTP_CLIENT if verify_ssl else _SSL_UNVERIFIED_CLIENT
 
-        try:
-            resp = await client.post(
-                f"{url}{endpoint}", json=payload, headers=headers,
-                timeout=timeout_ms / 1000,
-            )
-            if resp.status_code >= 400:
-                try:
-                    body = resp.json()
-                    msg = body.get("error", {}).get("message", resp.text[:200])
-                except Exception:
-                    msg = resp.text[:500]
-                raise BackendError(resp.status_code, msg)
-            return resp.json()
-        finally:
-            if not verify_ssl:
-                await client.aclose()
+        resp = await client.post(
+            f"{url}{endpoint}", json=payload, headers=headers,
+            timeout=timeout_ms / 1000,
+        )
+        if resp.status_code >= 400:
+            try:
+                body = resp.json()
+                msg = body.get("error", {}).get("message", resp.text[:200])
+            except Exception:
+                msg = resp.text[:500]
+            raise BackendError(resp.status_code, msg)
+        return resp.json()

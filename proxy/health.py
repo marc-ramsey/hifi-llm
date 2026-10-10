@@ -48,21 +48,45 @@ class HealthReport:
 
 # ── Probe function ──────────────────────────────────────────────────────────
 
-DEFAULT_TIMEOUT = 5.0  # seconds per backend probe (runtime)
-STARTUP_TIMEOUT = 2.0  # shorter timeout for initial startup probe (before config is loaded)
+DEFAULT_TIMEOUT = httpx.Timeout(
+    connect=2.0,   # quick to detect unreachable backends
+    read=5.0,      # generous for slow backends (e.g., cold model loads)
+    write=5.0,
+    pool=10.0,
+)
+STARTUP_TIMEOUT = httpx.Timeout(
+    connect=1.0,
+    read=2.0,
+    write=2.0,
+    pool=5.0,
+)
+
+
+def _make_timeout(timeout: float | httpx.Timeout) -> httpx.Timeout:
+    """Normalise a timeout value to an httpx.Timeout.
+
+    Accepts either a plain float (legacy: all timeouts equal) or an
+    httpx.Timeout object.  Returns the value unchanged if already structured;
+    otherwise wraps it as ``httpx.Timeout(connect=v, read=v, write=v, pool=v*2)``
+    so that callers passing a bare float still get differentiated connect vs.
+    read timeouts.
+    """
+    if isinstance(timeout, httpx.Timeout):
+        return timeout
+    return httpx.Timeout(connect=timeout, read=timeout, write=timeout, pool=timeout * 2)
 
 
 async def _probe_single(
     client: httpx.AsyncClient,
     name: str,
     url: str,
-    timeout: float,
+    timeout: float | httpx.Timeout = DEFAULT_TIMEOUT,
     verify_ssl: bool = True,
 ) -> BackendHealth:
     """Probe a single backend and return its health state."""
     start = time.monotonic()
     try:
-        resp = await client.get(f"{url}/v1/models", timeout=timeout, verify=verify_ssl)
+        resp = await client.get(f"{url}/v1/models", timeout=_make_timeout(timeout), verify=verify_ssl)
         elapsed_ms = (time.monotonic() - start) * 1000
 
         if resp.status_code == 200:
@@ -103,7 +127,7 @@ async def _probe_single(
 
 async def collect_health(
     models: list[Any],
-    timeout: float = DEFAULT_TIMEOUT,
+    timeout: float | httpx.Timeout = DEFAULT_TIMEOUT,
 ) -> HealthReport:
     """Probe all configured backends and return a HealthReport.
 
@@ -111,7 +135,8 @@ async def collect_health(
 
     Args:
         models: List of ModelConfig objects (each must have .name and .url).
-        timeout: Per-backend probe timeout in seconds.
+        timeout: Per-backend probe timeout.  Accepts a plain float (legacy)
+                 or an ``httpx.Timeout`` with separate connect/read/write values.
 
     Returns:
         HealthReport with status for each backend.
@@ -119,7 +144,7 @@ async def collect_health(
     if not models:
         return HealthReport()
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with httpx.AsyncClient(timeout=_make_timeout(timeout)) as client:
         tasks = [_probe_single(client, m.name, m.url, timeout, verify_ssl=m.verify_ssl) for m in models]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -202,7 +227,7 @@ def log_health_report(report: HealthReport) -> None:
 
 async def _probe_loop(models: list[Any], interval: float) -> None:
     """Continuously probe backends at the given interval."""
-    timeout = STARTUP_TIMEOUT  # first probe uses short timeout
+    timeout = STARTUP_TIMEOUT  # first probe uses short structured timeout
     while True:
         try:
             report = await collect_health(models, timeout=timeout)
@@ -211,7 +236,8 @@ async def _probe_loop(models: list[Any], interval: float) -> None:
             log_health_report(report)
         except Exception:
             logger.exception("Health probe failed")
-        # After first probe, use the configured interval timeout
+        # After first probe, use the configured interval as a plain float
+        # (which _make_timeout will wrap into a structured Timeout).
         timeout = interval
         await asyncio.sleep(interval)
 

@@ -1,8 +1,10 @@
 """API-key authentication middleware.
 
 Reads the API key dynamically from the config registry on every request so
-that SIGHUP config reloads take effect immediately — no app rebuild needed
-for auth changes.
+that SIGHUP config reloads take effect immediately.  On each reload a fresh
+FastAPI app (with fresh middleware instances) is built via ``create_app()``,
+which reads the updated global config.  The dynamic ``get()`` call ensures
+auth changes are picked up without requiring a process restart.
 """
 
 from __future__ import annotations
@@ -16,9 +18,6 @@ from config import get
 
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # Read the API key dynamically from the config registry so that
-        # SIGHUP reloads (which swap _current) take effect immediately —
-        # no app rebuild needed for auth changes.
         api_key = get().auth.api_key
 
         # No key configured — skip auth
