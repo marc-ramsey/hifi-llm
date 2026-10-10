@@ -129,7 +129,7 @@ async def _forward_json(request: Request, endpoint: str) -> JSONResponse:
 
 # ── GET /v1/models ──────────────────────────────────────────────────────────
 
-@router.get("/models")
+@router.get("/models", summary="List available models", description="Returns the list of model objects available in the API. Each model includes its id, owned_by backend type, and current health status.")
 async def list_models():
     """Return the list of configured models in OpenAI format with status."""
 
@@ -158,7 +158,7 @@ async def list_models():
 
 # ── POST /v1/chat/completions ───────────────────────────────────────────────
 
-@router.post("/chat/completions")
+@router.post("/chat/completions", summary="Create chat completion", description="Creates a model response for the given conversation. The request body is forwarded to the backend after merging per-model default parameters (temperature, top_p, etc.). Supports both streaming and non-streaming responses.", responses={400: {"description": "Invalid model or request"}, 502: {"description": "Backend error"}})
 async def chat_completions(request: Request):
     """Proxy /v1/chat/completions. Stream or JSON, delegated to adapter."""
     _, payload = await _resolve_and_merge(request)
@@ -170,7 +170,7 @@ async def chat_completions(request: Request):
 
 # ── POST /v1/embeddings ─────────────────────────────────────────────────────
 
-@router.post("/embeddings")
+@router.post("/embeddings", summary="Create embeddings", description="Creates an embedding vector representing the input text. The request is forwarded to the configured embedding model backend.", responses={400: {"description": "Invalid model or request"}, 502: {"description": "Backend error"}})
 async def embeddings(request: Request):
     """Proxy /v1/embeddings to the backend."""
     return await _forward_json(request, "/v1/embeddings")
@@ -178,7 +178,7 @@ async def embeddings(request: Request):
 
 # ── POST /v1/completions (legacy) ───────────────────────────────────────────
 
-@router.post("/completions")
+@router.post("/completions", summary="Create legacy completion (deprecated)", description="Creates a completion for the provided prompt and parameters. Deprecated — use /chat/completions instead.", responses={400: {"description": "Invalid model or request"}, 502: {"description": "Backend error"}})
 async def completions(request: Request):
     """Proxy /v1/completions. Stream or JSON, delegated to adapter."""
     _, payload = await _resolve_and_merge(request)

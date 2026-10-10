@@ -105,10 +105,11 @@ def run(config_path: str | None = None) -> None:
     try:
         asyncio.run(_server.serve())
     finally:
-        # Cancel the periodic health probe task and close HTTP connections
+        # Cancel the periodic health probe task, shut down managed processes,
+        # and gracefully close HTTP clients (awaits in-flight requests).
         stop_health_probe()
         ProcessManager.shutdown()
-        close_http_client()
+        asyncio.get_event_loop().run_until_complete(close_http_client())
 
     logger.info("Shutdown complete")
 

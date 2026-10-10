@@ -97,15 +97,14 @@ _SSL_UNVERIFIED_CLIENT = httpx.AsyncClient(
 )
 
 
-def close_http_client() -> None:
+async def close_http_client() -> None:
     """Close all shared HTTP clients and drain keep-alive connections.
 
-    Runs synchronously — calls .close() which does NOT await, so any
-    pending coroutines are discarded. This is safe at shutdown since
-    no more requests will be made.
+    Awaits graceful shutdown — any in-flight requests complete before
+    the clients are closed. Call from an async context (e.g. shutdown hook).
     """
-    _HTTP_CLIENT.close()
-    _SSL_UNVERIFIED_CLIENT.close()
+    await _HTTP_CLIENT.aclose()
+    await _SSL_UNVERIFIED_CLIENT.aclose()
 
 
 class OpenAICompatibleAdapter(BaseAdapter):

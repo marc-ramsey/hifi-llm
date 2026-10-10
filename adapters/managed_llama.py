@@ -34,6 +34,8 @@ class ManagedLlamaAdapter(BaseAdapter):
     ``default_params`` flows through unchanged to the HTTP API.
     """
 
+    accepts_model_config = True
+
     def __init__(self, model_config: ModelConfig) -> None:
         self._model_config = model_config
         self._delegate = LlamaCppAdapter()

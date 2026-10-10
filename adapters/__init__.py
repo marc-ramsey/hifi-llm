@@ -47,12 +47,18 @@ def get_adapter(
     if cls is None:
         logger.info("Unknown backend '%s', falling back to OpenAICompatibleAdapter", backend)
         return OpenAICompatibleAdapter(api_key=api_key)
-    # Adapters that need model config accept it; others only take api_key.
-    if model_config is not None:
-        import inspect
-        sig = inspect.signature(cls.__init__)
-        if "model_config" in sig.parameters:
+
+    # Adapters that need model config declare accepts_model_config = True.
+    if getattr(cls, "accepts_model_config", False):
+        if model_config is not None:
             return cls(model_config=model_config)
+        logger.warning(
+            "Adapter '%s' requires model_config but none was provided; "
+            "falling back to OpenAICompatibleAdapter",
+            backend,
+        )
+        return OpenAICompatibleAdapter(api_key=api_key)
+
     return cls(api_key=api_key)
 
 

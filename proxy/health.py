@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # Shared mutable state — updated by the periodic probe task
 _current_report_value: HealthReport | None = None
-_health_task: asyncio.Task | None = None
+_health_task: asyncio.Task[None] | None = None
 _deferred_models: list[Any] | None = None  # models to probe when event loop starts
 _previous_status: dict[str, HealthStatus] | None = None  # name -> status for change detection
 

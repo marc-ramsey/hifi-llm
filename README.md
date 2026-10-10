@@ -39,15 +39,32 @@ listen:
   host: 0.0.0.0      # bind address
   port: 8080          # bind port
 
+cors:
+  enabled: true       # set false to disable CORS entirely
+  allow_origins: ["*"]  # lock down to specific origins in production
+  allow_methods: ["*"]
+  allow_headers: ["*"]
+
 auth:
-  api_key: null       # set a string to require Bearer token auth
+  api_key: null       # set a string (global) or dict of model->key for per-model auth
+
+rate_limit:           # per-IP sliding window rate limiting (disabled by default)
+  enabled: false
+  requests_per_minute: 60
+  endpoints:
+    "/v1/chat/completions": 30
+    "/v1/embeddings": 20
 
 models:
   - name: "fast-agent"
     url: "http://backend:8080"
+    provider: llama.cpp          # display hint for frontends like OWUI
+    backend: openai_compatible   # adapter type: "llama_cpp", "managed_llama", or any registered
+    api_key: null                # optional per-model backend auth token (${VAR} expanded)
     default_params:
       temperature: 0.7
       top_p: 0.95
+    verify_ssl: true             # set false for self-signed backend certs
 
   - name: "slow-thinker"
     url: "http://backend:8081"
@@ -55,7 +72,23 @@ models:
       temperature: 0.7
       top_p: 0.9
 
-static_files: []      # serve files from filesystem directories
+# ── Managed local model (HiFi launches the server process) ───────────
+  - name: "local-llama"
+    url: "http://127.0.0.1:8080"
+    backend: managed_llama
+    llama_binary: "/usr/local/bin/llama-server"
+    server_config:
+      ctx_size: 4096
+      n_gpu_layers: 99
+      threads: 8
+
+# ── Static file serving ─────────────────────────────────────────────
+static_files:
+  - path: "/docs"
+    directories:
+      - ./docs
+
+health_check_interval: 2.0      # seconds between backend health probes
 ```
 
 Environment variable expansion: use `${VAR_NAME}` in config string values and they'll be resolved from the process environment.

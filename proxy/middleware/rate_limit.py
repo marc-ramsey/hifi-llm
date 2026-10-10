@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -33,8 +33,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._config = config
         self._metrics = metrics
-        # ip -> list of request timestamps (seconds since epoch)
-        self._counters: dict[str, list[float]] = defaultdict(list)
+        # ip -> deque of request timestamps (seconds since epoch), auto-evicts old entries
+        self._counters: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=10_000))
 
     def _get_limit(self, path: str) -> int | None:
         """Return the rate limit for this path, or None if unlimited."""
@@ -66,12 +66,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         now = time.time()
         window = 60.0  # sliding window in seconds
 
-        # Prune old entries outside the window
+        # Prune old entries outside the window (O(n) but deque auto-trims too)
         timestamps = self._counters[ip]
         cutoff = now - window
-        self._counters[ip] = [t for t in timestamps if t > cutoff]
+        while timestamps and timestamps[0] <= cutoff:
+            timestamps.popleft()
 
-        if len(self._counters[ip]) >= limit:
+        if len(timestamps) >= limit:
             logger.warning("Rate limit exceeded for %s on %s (%d/%d)", ip, request.url.path, len(self._counters[ip]), limit)
             if self._metrics is not None:
                 self._metrics.record_rate_limit(ip)
@@ -88,7 +89,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 headers={"Retry-After": "60"},
             )
 
-        self._counters[ip].append(now)
+        timestamps.append(now)
         return None
 
     async def dispatch(self, request: Request, call_next):

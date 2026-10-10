@@ -30,8 +30,11 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
 
     app = FastAPI(
         title="Simple LLM Proxy",
-        description="OpenAI-compatible reverse proxy for multiple LLM backends",
+        description="OpenAI-compatible reverse proxy for multiple LLM backends. "
+                    "Routes /v1/* requests to configured backend servers, merging per-model default parameters.",
         version="0.1.0",
+        docs_url="/docs",
+        openapi_url="/openapi.json",
         lifespan=_lifespan,
     )
 
