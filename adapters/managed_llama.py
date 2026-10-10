@@ -67,10 +67,11 @@ class ManagedLlamaAdapter(BaseAdapter):
         """Ensure the server is running, then delegate to LlamaCppAdapter."""
         cmd = self._build_command()
         ProcessManager.ensure_running(self._model_config.name, cmd)
-        return self._delegate.forward_stream(
+        async for chunk in self._delegate.forward_stream(
             url=url, endpoint=endpoint, payload=payload,
             api_key=api_key, timeout_ms=timeout_ms, verify_ssl=verify_ssl,
-        )
+        ):
+            yield chunk
 
     async def forward_json(
         self,
@@ -84,7 +85,7 @@ class ManagedLlamaAdapter(BaseAdapter):
         """Ensure the server is running, then delegate to LlamaCppAdapter."""
         cmd = self._build_command()
         ProcessManager.ensure_running(self._model_config.name, cmd)
-        return self._delegate.forward_json(
+        return await self._delegate.forward_json(
             url=url, endpoint=endpoint, payload=payload,
             api_key=api_key, timeout_ms=timeout_ms, verify_ssl=verify_ssl,
         )
