@@ -55,6 +55,12 @@ class BackendError(Exception):
         super().__init__(f"Backend error {status_code}: {message}")
 
 
+_HTTP_CLIENT = httpx.AsyncClient(
+    timeout=120.0,
+    limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+)
+
+
 class OpenAICompatibleAdapter(BaseAdapter):
     """Generic adapter for any backend that speaks the OpenAI API format.
 
@@ -95,18 +101,18 @@ class OpenAICompatibleAdapter(BaseAdapter):
             headers["Authorization"] = f"Bearer {key}"
 
         try:
-            async with httpx.AsyncClient(timeout=timeout_ms / 1000) as client:
-                async with client.stream(
-                    "POST", f"{url}{endpoint}", json=payload, headers=headers
-                ) as resp:
-                    # Check status BEFORE streaming — catches immediate errors
-                    if resp.status_code >= 400:
-                        error_body = await resp.aread()
-                        msg = error_body.decode("utf-8", errors="replace")[:500]
-                        yield self._error_sse(resp.status_code, msg)
-                        return
-                    async for chunk in resp.aiter_bytes():
-                        yield chunk
+            async with _HTTP_CLIENT.stream(
+                "POST", f"{url}{endpoint}", json=payload, headers=headers,
+                timeout=timeout_ms / 1000,
+            ) as resp:
+                # Check status BEFORE streaming — catches immediate errors
+                if resp.status_code >= 400:
+                    error_body = await resp.aread()
+                    msg = error_body.decode("utf-8", errors="replace")[:500]
+                    yield self._error_sse(resp.status_code, msg)
+                    return
+                async for chunk in resp.aiter_bytes():
+                    yield chunk
         except httpx.TimeoutException:
             yield self._error_sse(408, f"Backend timed out after {timeout_ms}ms")
         except httpx.ConnectError as e:
@@ -128,13 +134,15 @@ class OpenAICompatibleAdapter(BaseAdapter):
         if key:
             headers["Authorization"] = f"Bearer {key}"
 
-        async with httpx.AsyncClient(timeout=timeout_ms / 1000) as client:
-            resp = await client.post(f"{url}{endpoint}", json=payload, headers=headers)
-            if resp.status_code >= 400:
-                try:
-                    body = resp.json()
-                    msg = body.get("error", {}).get("message", resp.text[:200])
-                except Exception:
-                    msg = resp.text[:500]
-                raise BackendError(resp.status_code, msg)
-            return resp.json()
+        resp = await _HTTP_CLIENT.post(
+            f"{url}{endpoint}", json=payload, headers=headers,
+            timeout=timeout_ms / 1000,
+        )
+        if resp.status_code >= 400:
+            try:
+                body = resp.json()
+                msg = body.get("error", {}).get("message", resp.text[:200])
+            except Exception:
+                msg = resp.text[:500]
+            raise BackendError(resp.status_code, msg)
+        return resp.json()

@@ -16,7 +16,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from .base import BaseAdapter, BackendError
+from .base import _HTTP_CLIENT, BaseAdapter, BackendError
 
 logger = logging.getLogger(__name__)
 
@@ -61,17 +61,17 @@ class LlamaCppAdapter(BaseAdapter):
             headers["Authorization"] = f"Bearer {key}"
 
         try:
-            async with httpx.AsyncClient(timeout=timeout_ms / 1000) as client:
-                async with client.stream(
-                    "POST", f"{url}{endpoint}", json=payload, headers=headers
-                ) as resp:
-                    if resp.status_code >= 400:
-                        error_body = await resp.aread()
-                        msg = error_body.decode("utf-8", errors="replace")[:500]
-                        yield self._error_sse(resp.status_code, msg)
-                        return
-                    async for chunk in resp.aiter_bytes():
-                        yield chunk
+            async with _HTTP_CLIENT.stream(
+                "POST", f"{url}{endpoint}", json=payload, headers=headers,
+                timeout=timeout_ms / 1000,
+            ) as resp:
+                if resp.status_code >= 400:
+                    error_body = await resp.aread()
+                    msg = error_body.decode("utf-8", errors="replace")[:500]
+                    yield self._error_sse(resp.status_code, msg)
+                    return
+                async for chunk in resp.aiter_bytes():
+                    yield chunk
         except httpx.TimeoutException:
             yield self._error_sse(408, f"Backend timed out after {timeout_ms}ms")
         except httpx.ConnectError as e:
@@ -96,19 +96,21 @@ class LlamaCppAdapter(BaseAdapter):
         if key:
             headers["Authorization"] = f"Bearer {key}"
 
-        async with httpx.AsyncClient(timeout=timeout_ms / 1000) as client:
-            resp = await client.post(f"{url}{endpoint}", json=payload, headers=headers)
-            if resp.status_code >= 400:
-                try:
-                    body = resp.json()
-                    msg = body.get("error", {}).get("message", resp.text[:200])
-                except Exception:
-                    msg = resp.text[:500]
-                raise BackendError(resp.status_code, msg)
+        resp = await _HTTP_CLIENT.post(
+            f"{url}{endpoint}", json=payload, headers=headers,
+            timeout=timeout_ms / 1000,
+        )
+        if resp.status_code >= 400:
+            try:
+                body = resp.json()
+                msg = body.get("error", {}).get("message", resp.text[:200])
+            except Exception:
+                msg = resp.text[:500]
+            raise BackendError(resp.status_code, msg)
 
-            data = resp.json()
-            data = self._normalise_response(data)
-            return data
+        data = resp.json()
+        data = self._normalise_response(data)
+        return data
 
     def _normalise_response(self, data: dict[str, Any]) -> dict[str, Any]:
         """Normalise llama-server non-streaming response to OpenAI-compatible shape."""
