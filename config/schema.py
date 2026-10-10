@@ -66,13 +66,27 @@ class ModelConfig(BaseModel):
         return v
 
 
+class StaticFileConfig(BaseModel):
+    """Serve static files from one or more directories at a URL path."""
+    path: str = "/"
+    directories: list[Path]
+
+    @field_validator("directories")
+    @classmethod
+    def validate_directories(cls, v: list[Path]) -> list[Path]:
+        for d in v:
+            if not d.is_dir():
+                raise ValueError(f"static_files directory does not exist: {d}")
+        return v
+
+
 class ProxyConfig(BaseModel):
     listen: ListenConfig = Field(default_factory=ListenConfig)
     cors: CORSConfig = Field(default_factory=CORSConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
     models: list[ModelConfig] = Field(default_factory=list)
-    plugins_dir: Path | None = None
+    static_files: list[StaticFileConfig] = Field(default_factory=list)
     health_check_interval: float = Field(default=2.0, gt=0, description="Seconds between backend health probes")
 
     @field_validator("models")
@@ -81,11 +95,4 @@ class ProxyConfig(BaseModel):
         names = [m.name for m in v]
         if len(names) != len(set(names)):
             raise ValueError("models[].name must be globally unique")
-        return v
-
-    @field_validator("plugins_dir")
-    @classmethod
-    def validate_plugins_dir(cls, v: Path | None) -> Path | None:
-        if v is not None and not v.is_dir():
-            raise ValueError(f"plugins_dir does not exist or is not a directory: {v}")
         return v

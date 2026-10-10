@@ -35,5 +35,12 @@ models:
       temperature: 0.7
       top_p: 0.9
 
-plugins_dir: null               # path to directory with Python plugins
+# ── Static file serving ───────────────────────────────────────────────
+# Serve files from filesystem directories at configured URL paths.
+# Multiple directories per path are supported (first match wins).
+static_files:
+  - path: "/docs"
+    directories:
+      - ./docs
+
 health_check_interval: 2.0      # seconds between backend health probes

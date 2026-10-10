@@ -220,7 +220,7 @@ models:
     url: "{backend_url}"
     default_params: {{}}
 
-plugins_dir: null
+static_files: []
 """
     )
 

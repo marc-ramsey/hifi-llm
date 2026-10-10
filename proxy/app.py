@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from config import ProxyConfig, get
 
@@ -108,12 +109,13 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         from fastapi.responses import PlainTextResponse
         return PlainTextResponse(content=metrics.generate())
 
-    # ── Plugins ───────────────────────────────────────────────────────────
+    # ── Static file serving ───────────────────────────────────────────────
 
-    plugins_dir = config.plugins_dir if config else get().plugins_dir
-    if plugins_dir:
-        from plugins.manager import load_plugins
-        load_plugins(Path(plugins_dir), app)
+    for sf in config.static_files:
+        for dir_path in sf.directories:
+            if dir_path.is_dir():
+                app.mount(sf.path, StaticFiles(directory=str(dir_path)))
+                logger.info("Serving static files at %s from %s", sf.path, dir_path)
 
     app.state.metrics = metrics
 

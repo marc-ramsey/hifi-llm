@@ -37,7 +37,7 @@ def _reload(signum: int, _frame) -> None:
     The ConfigReloadableApp wrapper ensures uvicorn always sees the same
     object while new requests use the freshly-built app from updated
     config (including auth middleware, CORS settings, body-size limits,
-    plugins, etc.).  In-flight requests on the old app complete normally.
+    static files, etc.).  In-flight requests on the old app complete normally.
     """
     global _reloadable_app
     logger.info("Received SIGHUP, reloading config...")
@@ -50,7 +50,7 @@ def _reload(signum: int, _frame) -> None:
         restart_health_probe(config.models, interval=config.health_check_interval)
 
         # Swap to a fresh ASGI app — this picks up updated auth middleware,
-        # CORS settings, body-size limits, plugins, etc.  In-flight requests
+        # CORS settings, body-size limits, static files, etc.  In-flight requests
         # on the old app finish naturally; new requests use the new one.
         if _reloadable_app is not None:
             _reloadable_app.reload()
@@ -67,10 +67,10 @@ def run(config_path: str | None = None) -> None:
 
     # Load config on first startup
     config = _load_config(config_path)
-    logger.info("Loaded config: %d model(s), auth=%s, plugins_dir=%s",
+    logger.info("Loaded config: %d model(s), auth=%s, static_files=%d",
                 len(config.models),
                 "enabled" if config.auth.api_key else "disabled",
-                config.plugins_dir)
+                len(config.static_files))
 
     # Register SIGHUP for config reload.
     # SIGINT/SIGTERM are handled by uvicorn's internal capture_signals() which

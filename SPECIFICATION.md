@@ -15,7 +15,6 @@ Key goals
 |------|-------------|
 | **Declarative configuration** | All backends, default parameters, and authentication are defined in a single YAML file. |
 | **Multiple instances of the same checkpoint** | The same model can be launched multiple times with distinct URLs and sampling parameters. |
-| **Plug‑in architecture** | Optional modules can register extra routes, intercept requests/responses, add caching, tool‑calling, or expose custom agents. |
 | **Stateless & horizontally scalable** | No persistent state is required; the proxy can be replicated behind a load‑balancer. |
 | **Ubuntu 26.04 ready** | All dependencies are available via `apt`, `pip`, or `npm` on Ubuntu 26.04. |
 | **Security‑first** | Single API‑key authentication, request size limits, optional TLS termination. |
@@ -30,13 +29,11 @@ Key goals
 | (OpenAI‑compatible)   |   |   (Node/Express, FastAPI) |   |   (llama‑cpp, vLLM, |
 |                     |   |   - Config loader          |   |   OpenAI‑compatible) |
 +-------------------+      |   - Router/Dispatcher      |      +-------------------+
-                           |   - Plug‑in manager        |
                            |   - Health/metrics endpoint|
                            +---------------------------+
 ```
 
 * **Router/Dispatcher** selects the backend based on the `model` field (or a custom header) and merges per‑model default parameters with the client payload. 
-* **Plug‑in manager** loads optional JavaScript/TypeScript (or Python) modules from a `plugins/` directory. 
 * **Health** exposes `/health` (JSON).
 
 ---
@@ -50,10 +47,7 @@ Key goals
 | FR‑03 | **Per‑model default parameters** | Each entry in `models[]` may share a `url` with other entries; the **only identifier** that distinguishes them is the `name`. The proxy must apply the entry‑specific `default_params` to every request that references that `name`. |
 | FR‑04 | **Multiple instances of the same checkpoint** | Interpreted as *multiple logical versions* of the same physical checkpoint, **all using the same backend URL**. The config must allow duplicate URLs. |
 | FR‑05 | **API‑key authentication (optional)** | If `auth.api_key` is set, all requests must include `Authorization: Bearer <key>`. A single global key is used. |
-| FR‑06 | **Plug‑in registration** | Any file in `plugins/` that exports a `register(app)` function is loaded at startup. |
-| FR‑07 | **Request/Response hooks** | Plug‑ins can register `onRequest(req, ctx)` and `onResponse(resp, ctx)` callbacks to modify payloads. |
-| FR‑08 | **Custom agents** | Plug‑ins may expose arbitrary routes (e.g., `/v1/agents/echo`) and be referenced from the config as a synthetic model. |
-| FR‑09 | **Hot reload** | Receiving `SIGHUP` causes the proxy to reload `proxy-config.yaml` without dropping existing connections. |
+| FR‑06 | **Hot reload** | Receiving `SIGHUP` causes the proxy to reload `proxy-config.yaml` without dropping existing connections. |
 
 | FR‑11 | **Graceful shutdown** | On `SIGTERM`/`SIGINT` stop accepting new connections, finish in‑flight requests, then exit. |
 | FR‑12 | **TLS termination (optional)** | Proxy can be placed behind an external TLS terminator (e.g., Nginx, HAProxy) or run with self‑signed certs. |
@@ -69,7 +63,7 @@ Key goals
 | NFR‑03 | **Scalability** | Stateless → horizontal scaling via load balancer. |
 | NFR‑04 | **Security** | No code execution from untrusted payloads; input validation; request body size limits to prevent DoS. |
 | NFR‑05 | **Portability** | Works on Ubuntu 26.04 LTS with Node 20.x or Python 3.12+. |
-| NFR‑06 | **Maintainability** | All source files are under version control; configuration is human‑readable YAML; plug‑ins are isolated modules. |
+| NFR‑06 | **Maintainability** | All source files are under version control; configuration is human‑readable YAML. |
 
 ---
 
@@ -134,9 +128,6 @@ models:
       temperature: 0.5
       max_tokens: 2048
 
-# --------------------------------------------------------------
-# Plug‑in discovery
-plugins_dir: "./plugins"   # relative to the proxy working directory
 ```
 
 ### 5.1 Validation Rules
@@ -151,8 +142,6 @@ plugins_dir: "./plugins"   # relative to the proxy working directory
 | `models[].url` | Valid URL with scheme `http` or `https`. **May appear multiple times** – duplicate URLs are allowed. |
 | `models[].default_params` | Keys must be valid OpenAI sampling parameters (`temperature`, `top_p`, `max_tokens`, `repetition_penalty`, …). |
 | `models[].api_key` | If present, may contain `${VAR}` placeholders that are expanded from the process environment. |
-| `plugins_dir` | Path must exist and be readable. |
-
 ---
 
 ## 6. Adapter Interface (Language‑agnostic contract)
@@ -174,62 +163,9 @@ forward({
 
 ---
 
-## 7. Plug‑in API
-
-Plug‑ins are ordinary modules (JavaScript/TypeScript **or** Python) that export a single function:
-
-```js
-export function register(app) {
-    // `app` is the underlying HTTP framework instance
-    // (Express for Node, FastAPI for Python). Use its routing API.
-}
-```
-
-### 7.1 Available Hooks
-
-| Hook | Signature | When invoked |
-|------|-----------|--------------|
-| `onRequest(req, ctx)` | `async (req, ctx) => void` | Before model resolution; can modify `req.body` or add to `ctx`. |
-| `onResponse(resp, ctx)` | `async (resp, ctx) => void` | After backend response, before sending to client; can edit `resp`. |
-| `registerRoutes(app)` | `() => void` | Called during startup; allows arbitrary route registration. |
-| `healthCheck()` | `async () => { ok: boolean, details?: any }` | Polled by `/health` endpoint; contributes to overall health status. |
-
-* `ctx` is a per‑request mutable object (e.g., `{ startTime: Date, model: string, authToken?: string }`).
-
-### 7.2 Example Plug‑in Skeleton (Node)
-
-```js
-// plugins/example-cache.js
-import LRU from "lru-cache";
-
-const cache = new LRU({ max: 500 });
-
-export function register(app) {
-  app.use(async (req, res, next) => {
-    if (req.path !== "/v1/chat/completions") return next();
-
-    const key = JSON.stringify({
-      model: req.body.model,
-      messages: req.body.messages,
-      params: req.body,
-    });
-
-    const cached = cache.get(key);
-    if (cached) return res.json(cached);
-
-    const originalJson = res.json.bind(res);
-    res.json = (body) => {
-      cache.set(key, body);
-      return originalJson(body);
-    };
-    next();
-  });
-}
-```
-
 ---
 
-## 8. Deployment on Ubuntu 26.04
+## 7. Deployment on Ubuntu 26.04
 
 ### 8.1 System Packages
 
@@ -251,7 +187,6 @@ sudo apt install -y python3 python3-pip python3-venv
 │   ├─ adapters/
 │   │   ├─ llama_cpp.js
 │   │   └─ openai.js
-│   └─ plugins/        # optional plug‑ins
 ├─ config/
 │   └─ proxy-config.yaml
 ├─ logs/
@@ -320,9 +255,6 @@ All tests must pass on a clean Ubuntu 26.04 VM.
 1. **Adding a new backend**  
    * Implement an adapter module conforming to the **Adapter Interface**. 
    * Add a new entry to `proxy-config.yaml` with `backend: "<module_name>"`. 
-2. **Adding a new plug‑in**  
-   * Create a file under `plugins/` that exports `register(app)`. 
-   * Optionally expose custom routes or request/response hooks. 
 3. **Versioning**  
    * Increment `SPECFICATION.md` minor version for each backward‑compatible change, major for breaking changes. 
    * Tag releases in Git (e.g., `v1.0.0`). 
@@ -340,7 +272,6 @@ All tests must pass on a clean Ubuntu 26.04 VM.
 | **Version** | A *named configuration* that tells the backend **how** to run that checkpoint (temperature, top‑p, repetition‑penalty, etc.). |
 | **Backend** | An LLM server exposing an OpenAI‑compatible HTTP API (e.g., `llama.cpp`, `vLLM`). |
 | **Adapter** | Language‑specific module that forwards a request to a backend and normalises the response. |
-| **Plug‑in** | Optional module that can register extra routes or intercept traffic. |
 | **Model name** | The identifier supplied by the client in the `model` field; maps to a `models[].name` entry. |
 | **Default parameters** | Sampling and generation settings defined per model in the config file. |
 | **Hot reload** | Reloading configuration without stopping the process (triggered by `SIGHUP`). |
@@ -366,28 +297,14 @@ All tests must pass on a clean Ubuntu 26.04 VM.
 | Aspect | **Python** | **JavaScript / TypeScript (Node.js)** | **Compiled (Go / Rust / C++)** |
 |--------|------------|----------------------------------------|--------------------------------|
 | **Development speed** | • Very rapid prototyping – batteries‑included std‑lib, REPL, dynamic typing.<br>• Rich scientific‑ML ecosystem (requests, pydantic, FastAPI). | • Fast iteration with `npm`/`yarn` scripts; hot‑reload via `nodemon`.<br>• TypeScript adds optional static typing while keeping JavaScript ergonomics. | • Slower to write the first version – need to define structs, error handling, build steps.<br>• IDE support is excellent but the mental overhead is higher. |
-| **Type safety / correctness** | • Runtime‑only checks; can add `pydantic`/`dataclasses` for validation but still dynamic.<br>• Easy to miss mismatched JSON shapes until runtime. | • **TypeScript** provides compile‑time guarantees for request/response shapes, adapter signatures, and plug‑in contracts.<br>• Pure JavaScript has no safety. | • Full compile‑time type safety (Go’s static typing, Rust’s ownership model).<br>• Guarantees that adapters conform to the exact `forward` signature; impossible to pass a mismatched payload. |
+| **Type safety / correctness** | • Runtime‑only checks; can add `pydantic`/`dataclasses` for validation but still dynamic.<br>• Easy to miss mismatched JSON shapes until runtime. | • **TypeScript** provides compile‑time guarantees for request/response shapes, adapter signatures,<br>• Pure JavaScript has no safety. | • Full compile‑time type safety (Go’s static typing, Rust’s ownership model).<br>• Guarantees that adapters conform to the exact `forward` signature; impossible to pass a mismatched payload. |
 | **Performance (latency & throughput)** | • Interpreted; per‑request overhead ~ 1‑2 ms for JSON parsing + async I/O.<br>• Adequate when the dominant cost is the LLM backend (tens‑to‑hundreds ms). | • V8 JIT is very fast for JSON handling; similar latency to Python in practice.<br>• Non‑blocking event loop makes it easy to handle many concurrent connections with low memory per connection. | • Native binaries have the lowest per‑request overhead (sub‑millisecond JSON + network I/O).<br>• Go’s goroutine scheduler or Rust’s async runtimes can handle massive concurrency with minimal RAM. |
 | **Concurrency model** | • `asyncio` + `uvicorn` (FastAPI) – single‑threaded event loop, can spawn multiple workers with `gunicorn`/`uvicorn‑workers`.<br>• Simpler for CPU‑light workloads. | • Single‑threaded event loop (Node) + `cluster` module or PM2 for multi‑core scaling.<br>• Natural for I/O‑bound proxy. | • **Go**: goroutine per connection, built‑in scheduler; excellent for high‑connection counts.<br>• **Rust**: async/await with `tokio` or `async‑std`; zero‑cost abstractions but more boilerplate. |
 | **Ecosystem for HTTP / OpenAI** | • `fastapi` + `httpx` – OpenAPI auto‑generation, pydantic validation, easy dependency injection.<br>• Mature OpenAI SDK (`openai` python) for downstream calls. | • `express` / `fastify` + `axios` or native `http` – lightweight, many middleware libraries.<br>• Official `openai-node` SDK; good for streaming responses. | • **Go**: `net/http`, `chi`, `gin`; `openai-go` SDK is emerging.<br>• **Rust**: `warp`, `actix‑web`, `hyper`; `openai-rust` community crates. |
-| **Plug‑in model** | • Dynamically import Python modules (`importlib`).<br>• No compile step – plug‑ins can be dropped in at runtime. | • `require` / `import` of JS/TS files; hot‑reload possible with `nodemon`.<br>• TypeScript plug‑ins benefit from the same type definitions as core. | • Plug‑ins must be compiled into the binary or loaded as shared libraries (`dlopen`).<br>• More friction; versioning must be managed carefully. |
 | **Packaging & deployment** | • `venv` + `pip` – simple, but need Python runtime on the target host.<br>• Dockerfile size ~ 120 MB (official python‑slim). | • Single‑file `node` binary + `npm ci` – similar Docker size (~ 120 MB node‑slim).<br>• Can bundle with `pkg` or `esbuild` for a single executable if desired. | • Statically linked binaries (especially Rust) → Docker image < 20 MB.<br>• No runtime interpreter needed – easier to run on minimal VMs/containers. |
 | **Observability & tooling** | • `opentelemetry` integrations are mature.<br>• Debugging with `pdb`, `ipython` REPL. | • `opentelemetry-js`; built‑in `debug` logging.<br>• Node inspector (`chrome://inspect`). | • `opentelemetry-go` or `opentelemetry-rust`.<br>• Debuggers (`dlv` for Go, `gdb`/`lldb` for Rust). |
 | **Team skill‑set & hiring** | • Python is ubiquitous in ML teams; most LLM engineers already know it. | • Many full‑stack engineers are comfortable with JavaScript/TS; good if the same repo also contains front‑end tooling. | • Fewer engineers are fluent in Go/Rust; hiring may be harder, but those who know them bring strong systems‑engineering expertise. |
 | **Long‑term maintenance** | • Dynamic language can accumulate runtime bugs; type‑checking via `mypy` helps but is optional.<br>• Frequent library updates (e.g., FastAPI) but stable. | • TypeScript can enforce contracts, reducing regression risk.<br>• Node ecosystem evolves fast; occasional breaking changes in major versions. | • Binary compatibility is stable; once compiled you ship the exact version you tested.<br>• Language upgrades (e.g., Rust 2021 edition) are non‑breaking for most code. |
 | **Community & examples** | • Many open‑source LLM proxies (e.g., `text-generation-webui` extensions) are Python‑based. | • Several Node‑based OpenAI reverse‑proxies exist (e.g., `openai-proxy`, `oai-proxy`). | • Fewer ready‑made examples, but projects like `ollama` (Go) and `tgi` (Rust) show the pattern. |
 
-**TL;DR Summary & Recommendation**
-
-| Goal | Best Fit |
-|------|----------|
-| **Rapid prototyping / tight integration with existing ML pipelines** | **Python** – you get the fastest start‑up, a familiar ML stack, and excellent OpenAI SDK support. |
-| **Strong type safety **and** easy plug‑in development without a compile step** | **TypeScript (Node.js)** – adds static typing to the familiar JavaScript runtime, good for teams that already use web‑tech. |
-| **Maximum throughput, minimal footprint, and zero‑runtime dependencies** | **Compiled language (Go or Rust)** – best for production environments that need to serve thousands of concurrent connections on modest VMs or edge devices. |
-
-**Practical compromise**
-1. **Core proxy in TypeScript** – you gain compile‑time guarantees for the routing/plug‑in contract while keeping the same runtime as many front‑end services.
-2. **Adapters written in the language that best matches each backend** – e.g., a thin Python wrapper around `llama.cpp` if you already have a Python server, or a Go adapter for a high‑performance vLLM gateway.
-3. **Plug‑ins** can be authored in TS (for most use‑cases) and optionally compiled to a native binary if a particular plug‑in has heavy CPU work (e.g., a Rust‑based reranker).
-
-This mixed‑language approach lets you **start fast**, **maintain type safety**, and **opt‑out to compiled modules** only where performance or binary‑only deployment is a strict requirement.
+**Recommendation: Python.** The codebase is already implemented in Python with FastAPI + httpx. It provides the fastest path to a working proxy with excellent async HTTP support and OpenAI SDK compatibility.

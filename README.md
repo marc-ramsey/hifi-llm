@@ -9,7 +9,7 @@ A lightweight, OpenAI-compatible reverse proxy that routes requests across multi
 - **Transparent SSE streaming** — raw SSE pass-through for streaming responses, with reasoning-content normalization for Open WebUI compatibility
 - **Single global API key** auth — optional Bearer token guard
 - **Hot-reload config** — `SIGHUP` triggers reload without dropping connections
-- **Plugin system** — in-process directory scanning with `register(app)` hook
+- **Static file serving** — serve files from filesystem directories at configured URL paths
 - **Graceful shutdown** — `SIGTERM`/`SIGINT` drain active requests
 
 ## Quick Start
@@ -55,7 +55,7 @@ models:
       temperature: 0.7
       top_p: 0.9
 
-plugins_dir: null     # path to directory with Python plugins
+static_files: []      # serve files from filesystem directories
 ```
 
 Environment variable expansion: use `${VAR_NAME}` in config string values and they'll be resolved from the process environment.
@@ -100,24 +100,18 @@ Send `SIGHUP` to reload the config file without restarting:
 kill -HUP $(lsof -ti:8080)
 ```
 
-## Plugins
+## Static Files
 
-Place Python files in a directory and point `plugins_dir` at it. Each file must export a `register(app)` function that receives the FastAPI app instance. Plugins run in-process (a crashing plugin brings down the proxy).
+Serve files from filesystem directories at configured URL paths:
 
-Example plugin (`my_plugin.py`):
-
-```python
-from fastapi import APIRouter
-
-router = APIRouter()
-
-@router.get("/ping")
-async def ping():
-    return {"pong": True}
-
-def register(app):
-    app.include_router(router, prefix="/plugins")
+```yaml
+static_files:
+  - path: "/docs"
+    directories:
+      - ./docs
 ```
+
+Multiple directories per path are supported — the first directory that contains the requested file wins.
 
 ## Running as a Service
 
