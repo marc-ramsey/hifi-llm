@@ -48,6 +48,34 @@ class BaseAdapter(abc.ABC):
         """Return the full JSON response body."""
         ...
 
+    @staticmethod
+    def _error_sse(status_code: int, message: str) -> bytes:
+        """Format an OpenAI-compatible error as SSE bytes."""
+        error_data = {
+            "error": {
+                "message": message,
+                "type": "backend_error",
+                "param": None,
+                "code": status_code,
+            },
+        }
+        return f"data: {json.dumps(error_data)}\n\ndata: [DONE]\n\n".encode()
+
+    def _build_headers(self, api_key: str | None) -> dict[str, str]:
+        """Build HTTP headers for the backend request.
+
+        Override in subclasses to add custom headers (e.g. provider hints).
+        """
+        return {"Content-Type": "application/json"}
+
+    def _normalise_response(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Normalise the backend response to OpenAI-compatible shape.
+
+        Override in subclasses that talk to non-OpenAI backends.
+        The base implementation returns *data* unchanged.
+        """
+        return data
+
 
 class BackendError(Exception):
     """Raised when a backend returns an error response (non-streaming)."""
@@ -87,23 +115,16 @@ class OpenAICompatibleAdapter(BaseAdapter):
     Streaming errors are yielded as SSE-formatted error chunks so the
     generator never raises (StreamingResponse's async generator interface
     is fragile with exceptions).
+
+    Subclasses can customise behaviour by overriding:
+        _build_headers(api_key)   — add extra request headers
+        _normalise_response(data) — transform non-OpenAI responses
     """
 
     def __init__(self, api_key: str | None = None) -> None:
         self._api_key = api_key
 
-    @staticmethod
-    def _error_sse(status_code: int, message: str) -> bytes:
-        """Format an OpenAI-compatible error as SSE bytes."""
-        error_data = {
-            "error": {
-                "message": message,
-                "type": "backend_error",
-                "param": None,
-                "code": status_code,
-            },
-        }
-        return f"data: {json.dumps(error_data)}\n\ndata: [DONE]\n\n".encode()
+    # ── streaming ───────────────────────────────────────────────────────
 
     async def forward_stream(
         self,
@@ -116,9 +137,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
     ) -> AsyncIterator[bytes]:
         """Stream response bytes transparently. Never raises."""
         key = api_key or self._api_key
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if key:
-            headers["Authorization"] = f"Bearer {key}"
+        headers = {**self._build_headers(key), "Content-Type": "application/json"}
 
         client = _HTTP_CLIENT if verify_ssl else _SSL_UNVERIFIED_CLIENT
 
@@ -141,6 +160,8 @@ class OpenAICompatibleAdapter(BaseAdapter):
         except httpx.HTTPError as e:
             yield self._error_sse(502, str(e))
 
+    # ── non-streaming ───────────────────────────────────────────────────
+
     async def forward_json(
         self,
         url: str,
@@ -152,9 +173,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
     ) -> dict[str, Any]:
         """Return the full JSON response."""
         key = api_key or self._api_key
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if key:
-            headers["Authorization"] = f"Bearer {key}"
+        headers = {**self._build_headers(key), "Content-Type": "application/json"}
 
         client = _HTTP_CLIENT if verify_ssl else _SSL_UNVERIFIED_CLIENT
 
@@ -169,4 +188,6 @@ class OpenAICompatibleAdapter(BaseAdapter):
             except Exception:
                 msg = resp.text[:500]
             raise BackendError(resp.status_code, msg)
-        return resp.json()
+
+        data = resp.json()
+        return self._normalise_response(data)
