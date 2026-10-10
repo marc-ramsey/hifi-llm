@@ -216,6 +216,10 @@ models:
       top_p: 0.9
       max_tokens: 256
 
+  - name: "nomic-embed"
+    url: "{backend_url}"
+    default_params: {{}}
+
 plugins_dir: null
 """
     )

@@ -23,7 +23,7 @@ class TestHotReload:
         initial_models = {m["id"] for m in resp.json()["data"]}
         assert "gemma-4-26B-instruct" in initial_models
         assert "qwen3.6-35B-instruct" in initial_models
-        assert len(initial_models) == 2
+        assert len(initial_models) == 3
 
         # Step 2: Write a new config with an additional model
         new_config = f"""
@@ -48,6 +48,10 @@ models:
       temperature: 0.7
       top_p: 0.9
       max_tokens: 256
+
+  - name: "nomic-embed"
+    url: "{backend_url}"
+    default_params: {{}}
 
   - name: "added-via-sighup"
     url: "{backend_url}"
