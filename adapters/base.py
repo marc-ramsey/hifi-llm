@@ -51,14 +51,7 @@ class BaseAdapter(abc.ABC):
     @staticmethod
     def _error_sse(status_code: int, message: str) -> bytes:
         """Format an OpenAI-compatible error as SSE bytes."""
-        error_data = {
-            "error": {
-                "message": message,
-                "type": "backend_error",
-                "param": None,
-                "code": status_code,
-            },
-        }
+        error_data = make_error_response(message, "backend_error", status_code)
         return f"data: {json.dumps(error_data)}\n\ndata: [DONE]\n\n".encode()
 
     def _build_headers(self, api_key: str | None) -> dict[str, str]:
@@ -83,6 +76,22 @@ class BackendError(Exception):
         self.status_code = status_code
         self.message = message
         super().__init__(f"Backend error {status_code}: {message}")
+
+
+def make_error_response(message: str, error_type: str, code: int | None) -> dict:
+    """Build a standard OpenAI-compatible error dict.
+
+    Used by adapters, middleware, and exception handlers to return
+    consistent error shapes across the proxy.
+    """
+    return {
+        "error": {
+            "message": message,
+            "type": error_type,
+            "param": None,
+            "code": code,
+        },
+    }
 
 
 _HTTP_CLIENT = httpx.AsyncClient(
@@ -123,6 +132,27 @@ class OpenAICompatibleAdapter(BaseAdapter):
     def __init__(self, api_key: str | None = None) -> None:
         self._api_key = api_key
 
+    # ── internals ───────────────────────────────────────────────────────
+
+    def _get_client(self, verify_ssl: bool) -> httpx.AsyncClient:
+        """Return the appropriate HTTP client for the given SSL setting."""
+        return _HTTP_CLIENT if verify_ssl else _SSL_UNVERIFIED_CLIENT
+
+    def _build_request_headers(self, api_key: str | None) -> dict[str, str]:
+        """Build request headers including Content-Type and any custom headers."""
+        headers = self._build_headers(api_key)
+        headers["Content-Type"] = "application/json"
+        return headers
+
+    def _handle_error_response(self, resp: httpx.Response) -> str:
+        """Extract an error message from a non-2xx response."""
+        try:
+            body = resp.json()
+            msg = body.get("error", {}).get("message", resp.text[:200])
+        except Exception:
+            msg = resp.text[:500]
+        return msg
+
     # ── streaming ───────────────────────────────────────────────────────
 
     async def forward_stream(
@@ -136,9 +166,8 @@ class OpenAICompatibleAdapter(BaseAdapter):
     ) -> AsyncIterator[bytes]:
         """Stream response bytes transparently. Never raises."""
         key = api_key or self._api_key
-        headers = {**self._build_headers(key), "Content-Type": "application/json"}
-
-        client = _HTTP_CLIENT if verify_ssl else _SSL_UNVERIFIED_CLIENT
+        headers = self._build_request_headers(key)
+        client = self._get_client(verify_ssl)
 
         try:
             async with client.stream(
@@ -172,20 +201,15 @@ class OpenAICompatibleAdapter(BaseAdapter):
     ) -> dict[str, Any]:
         """Return the full JSON response."""
         key = api_key or self._api_key
-        headers = {**self._build_headers(key), "Content-Type": "application/json"}
-
-        client = _HTTP_CLIENT if verify_ssl else _SSL_UNVERIFIED_CLIENT
+        headers = self._build_request_headers(key)
+        client = self._get_client(verify_ssl)
 
         resp = await client.post(
             f"{url}{endpoint}", json=payload, headers=headers,
             timeout=timeout_ms / 1000,
         )
         if resp.status_code >= 400:
-            try:
-                body = resp.json()
-                msg = body.get("error", {}).get("message", resp.text[:200])
-            except Exception:
-                msg = resp.text[:500]
+            msg = self._handle_error_response(resp)
             raise BackendError(resp.status_code, msg)
 
         data = resp.json()

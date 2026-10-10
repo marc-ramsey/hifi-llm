@@ -25,27 +25,13 @@ class ProcessManager:
     Singleton — use the class methods; do not instantiate directly.
     """
 
-    _instance: ProcessManager | None = None
+    _processes: dict[str, _ProcessEntry] = {}
     COOLDOWN_SECONDS = 5.0
-
-    def __new__(cls) -> ProcessManager:
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._processes: dict[str, _ProcessEntry] = {}
-        return cls._instance
-
-    @classmethod
-    def _get_state(cls) -> dict[str, _ProcessEntry]:
-        """Internal: access the singleton's process registry."""
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._processes = {}
-        return cls._instance._processes
 
     @classmethod
     def is_running(cls, name: str) -> bool:
         """Check whether a managed process is currently alive."""
-        entry = cls._get_state().get(name)
+        entry = cls._processes.get(name)
         if entry is None:
             return False
         if entry.proc.poll() is not None:
@@ -61,7 +47,7 @@ class ProcessManager:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            cls._get_state()[name] = _ProcessEntry(proc=proc)
+            cls._processes[name] = _ProcessEntry(proc=proc)
             logger.info("Started managed process '%s': %s", name, " ".join(cmd))
             return True
         except Exception as e:
@@ -71,7 +57,7 @@ class ProcessManager:
     @classmethod
     def stop(cls, name: str) -> None:
         """Stop a managed process if running."""
-        entry = cls._get_state().pop(name, None)
+        entry = cls._processes.pop(name, None)
         if entry is not None and entry.proc.poll() is None:
             entry.proc.terminate()
             logger.info("Stopped managed process '%s'", name)
@@ -97,7 +83,7 @@ class ProcessManager:
             True if the process is running (or just started), False if
             still in cooldown from a recent restart attempt.
         """
-        entry = cls._get_state().get(name)
+        entry = cls._processes.get(name)
         if entry is not None and entry.proc.poll() is None:
             return True  # already running
 
@@ -111,15 +97,14 @@ class ProcessManager:
 
         success = cls.start(name, cmd)
         if success:
-            # Update the entry's restart timestamp (start() creates a new one)
-            cls._get_state()[name].last_restart = now
+            cls._processes[name].last_restart = now
         return success
 
     @classmethod
     def shutdown(cls) -> None:
         """Terminate all managed processes."""
-        for name, entry in list(cls._get_state().items()):
+        for name, entry in list(cls._processes.items()):
             if entry.proc.poll() is None:
                 entry.proc.terminate()
                 logger.info("Stopped managed process '%s' at shutdown", name)
-        cls._get_state().clear()
+        cls._processes.clear()

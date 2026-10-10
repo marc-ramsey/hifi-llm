@@ -279,7 +279,7 @@ def start_health_probe(
         logger.info("Health probe deferred until event loop starts (interval=%ds)", interval)
         return
     _health_task = asyncio.create_task(_probe_loop(models, interval))
-    logger.info("Health probe started (interval=%ds)")
+    logger.info("Health probe started (interval=%ds)", interval)
 
 
 def stop_health_probe() -> None:

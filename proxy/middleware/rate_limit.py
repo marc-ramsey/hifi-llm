@@ -24,6 +24,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from adapters.base import make_error_response
 
 logger = logging.getLogger("llm-proxy.rate_limit")
 
@@ -78,14 +79,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 self._metrics.record_rate_limit(ip)
             return JSONResponse(
                 status_code=429,
-                content={
-                    "error": {
-                        "message": "Rate limit exceeded",
-                        "type": "rate_limit_exceeded",
-                        "param": None,
-                        "code": 429,
-                    },
-                },
+                content=make_error_response("Rate limit exceeded", "rate_limit_exceeded", 429),
                 headers={"Retry-After": "60"},
             )
 

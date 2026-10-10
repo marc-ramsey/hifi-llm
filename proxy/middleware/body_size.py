@@ -19,6 +19,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from adapters.base import make_error_response
 
 logger = logging.getLogger("llm-proxy.body_size")
 
@@ -38,14 +39,7 @@ class BodySizeMiddleware(BaseHTTPMiddleware):
             )
             return JSONResponse(
                 status_code=413,
-                content={
-                    "error": {
-                        "message": "Request body too large (max 10 MB)",
-                        "type": "payload_too_large",
-                        "param": None,
-                        "code": 413,
-                    },
-                },
+                content=make_error_response("Request body too large (max 10 MB)", "payload_too_large", 413),
             )
 
         return await call_next(request)

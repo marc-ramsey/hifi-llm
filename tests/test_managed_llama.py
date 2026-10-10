@@ -179,10 +179,14 @@ class TestManagedLlamaAdapter:
             name="test-model",
             url=f"http://127.0.0.1:{port}",
             backend="managed_llama",
-            llama_binary="/usr/bin/llama-server",  # won't be used — server is up
+            llama_binary="/usr/bin/llama-server",
             server_config={"ctx_size": 4096},
         )
         adapter = ManagedLlamaAdapter(model_config)
+
+        # Pre-start the process so ensure_running returns True.
+        # The mock HTTP server at *port* will handle the actual request.
+        ProcessManager.start("test-model", ["sleep", "999"])
 
         import asyncio
         result = asyncio.run(adapter.forward_json(

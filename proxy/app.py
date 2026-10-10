@@ -40,22 +40,12 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
 
     # ── Exception handlers ────────────────────────────────────────────────
 
-    from adapters.base import BackendError
+    from adapters.base import BackendError, make_error_response
 
     @app.exception_handler(BackendError)
     async def backend_error_handler(request: Request, exc: BackendError):
         logger.warning("Backend error on %s: %s", request.url.path, exc.message)
-        return JSONResponse(
-            status_code=502,
-            content={
-                "error": {
-                    "message": exc.message,
-                    "type": "backend_error",
-                    "param": None,
-                    "code": exc.status_code,
-                },
-            },
-        )
+        return JSONResponse(status_code=502, content=make_error_response(exc.message, "backend_error", exc.status_code))
 
     # ── Middleware (outermost → innermost) ────────────────────────────────
 

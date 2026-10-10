@@ -51,10 +51,12 @@ class ConfigReloadableApp:
 
     async def __call__(self, scope: dict[str, Any], receive: ASGIReceive, send: ASGISend) -> None:
         if not self._initialized:
-            # First request — build the initial app from current config and
-            # start the periodic health probe background task.
+            # First request — build the initial app from current config.
             self._app = create_app(self._initial_config)
             self._initialized = True
+            # Start the health probe now that we have a running event loop.
+            # If called before a loop existed (e.g. __init__), start_health_probe
+            # internally defers; here the loop is running so it starts immediately.
             self._start_health_probe()
         return await self._app(scope, receive, send)
 
@@ -65,6 +67,9 @@ class ConfigReloadableApp:
         immediately use the new app.  This is an atomic pointer swap — no
         locks needed because CPython's GIL makes single-assignment swaps
         atomic, and the FastAPI app is immutable after construction.
+
+        Note: health probe restart is handled by main.py._reload() via
+        restart_health_probe(), not here — avoiding duplicate start calls.
         """
         old_app = self._app
         self._app = create_app()

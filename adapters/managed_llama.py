@@ -14,7 +14,7 @@ from typing import Any, AsyncIterator
 
 from config.schema import ModelConfig
 
-from .base import BaseAdapter
+from .base import BackendError, BaseAdapter
 from .llama_cpp import LlamaCppAdapter
 from proxy.process_manager import ProcessManager
 
@@ -68,7 +68,9 @@ class ManagedLlamaAdapter(BaseAdapter):
     ) -> AsyncIterator[bytes]:
         """Ensure the server is running, then delegate to LlamaCppAdapter."""
         cmd = self._build_command()
-        ProcessManager.ensure_running(self._model_config.name, cmd)
+        if not ProcessManager.ensure_running(self._model_config.name, cmd):
+            yield self._error_sse(503, "Managed llama-server is restarting — try again shortly")
+            return
         async for chunk in self._delegate.forward_stream(
             url=url, endpoint=endpoint, payload=payload,
             api_key=api_key, timeout_ms=timeout_ms, verify_ssl=verify_ssl,
@@ -86,7 +88,8 @@ class ManagedLlamaAdapter(BaseAdapter):
     ) -> dict[str, Any]:
         """Ensure the server is running, then delegate to LlamaCppAdapter."""
         cmd = self._build_command()
-        ProcessManager.ensure_running(self._model_config.name, cmd)
+        if not ProcessManager.ensure_running(self._model_config.name, cmd):
+            raise BackendError(503, "Managed llama-server is restarting — try again shortly")
         return await self._delegate.forward_json(
             url=url, endpoint=endpoint, payload=payload,
             api_key=api_key, timeout_ms=timeout_ms, verify_ssl=verify_ssl,
