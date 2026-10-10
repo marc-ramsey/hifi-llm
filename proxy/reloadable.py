@@ -15,6 +15,7 @@ import logging
 from typing import Any, Awaitable, Callable
 
 from proxy.app import create_app
+from proxy.health import start_health_probe
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +47,15 @@ class ConfigReloadableApp:
         self._app: Any = None
         self._initial_config = initial_config
         self._initialized = False
+        self._config = initial_config
 
     async def __call__(self, scope: dict[str, Any], receive: ASGIReceive, send: ASGISend) -> None:
         if not self._initialized:
-            # First request — build the initial app from current config.
+            # First request — build the initial app from current config and
+            # start the periodic health probe background task.
             self._app = create_app(self._initial_config)
             self._initialized = True
+            self._start_health_probe()
         return await self._app(scope, receive, send)
 
     def reload(self) -> None:
@@ -66,3 +70,10 @@ class ConfigReloadableApp:
         self._app = create_app()
         if old_app is not None:
             logger.info("Replaced ASGI app with fresh instance from updated config")
+
+    def _start_health_probe(self) -> None:
+        """Start the periodic health probe using current config."""
+        if self._config is None:
+            return
+        interval = getattr(self._config, "health_check_interval", 2.0)
+        start_health_probe(self._config.models, interval=interval)

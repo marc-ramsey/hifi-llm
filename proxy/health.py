@@ -91,7 +91,16 @@ async def _probe_single(
     """Probe a single backend and return its health state."""
     start = time.monotonic()
     try:
-        resp = await client.get(f"{url}/v1/models", timeout=_make_timeout(timeout), verify=verify_ssl)
+        probe_client = client if verify_ssl else httpx.AsyncClient(verify=False)
+        use_own_client = not verify_ssl
+        try:
+            resp = await probe_client.get(
+                f"{url}/v1/models", timeout=_make_timeout(timeout),
+            )
+        finally:
+            if use_own_client:
+                await probe_client.aclose()
+
         elapsed_ms = _elapsed_ms(start)
 
         if resp.status_code == 200:
@@ -307,9 +316,9 @@ def restart_health_probe(
         # Do NOT await old.result() here — SIGHUP handlers run on the main
         # thread and blocking would stall signal processing.  The cancelled
         # task will exit on its next sleep().
-    # Mark as done so start_health_probe's guard doesn't return early,
-    # but don't set to None (which would allow a double-call race).
-    _health_task = old
+    # Clear the reference so start_health_probe's guard sees it as done.
+    _health_task = None
+    start_health_probe(models, interval=interval)
 
 
 def _current_report() -> HealthReport:

@@ -9,7 +9,7 @@ import uvicorn
 
 from config import ProxyConfig, get, set
 from config.loader import load_config, resolve_config_path
-from proxy.health import restart_health_probe, stop_health_probe
+from proxy.health import restart_health_probe, stop_health_probe, _current_report_value
 from adapters.base import close_http_client
 from proxy.process_manager import ProcessManager
 from proxy.reloadable import ConfigReloadableApp
@@ -102,14 +102,16 @@ def run(config_path: str | None = None) -> None:
 
     # Run server — asyncio.run manages the event loop lifecycle cleanly.
     # Uvicorn's serve() handles SIGINT/SIGTERM internally (capture_signals).
-    try:
-        asyncio.run(_server.serve())
-    finally:
-        # Cancel the periodic health probe task, shut down managed processes,
-        # and gracefully close HTTP clients (awaits in-flight requests).
-        stop_health_probe()
-        ProcessManager.shutdown()
-        asyncio.get_event_loop().run_until_complete(close_http_client())
+    # We wrap the serve call so we can run async cleanup within the same loop.
+    async def _serve_and_cleanup():
+        try:
+            await _server.serve()
+        finally:
+            stop_health_probe()
+            ProcessManager.shutdown()
+            await close_http_client()
+
+    asyncio.run(_serve_and_cleanup())
 
     logger.info("Shutdown complete")
 
