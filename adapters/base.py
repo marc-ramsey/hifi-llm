@@ -64,8 +64,13 @@ _HTTP_CLIENT = httpx.AsyncClient(
 
 
 def close_http_client() -> None:
-    """Close the shared HTTP client and drain keep-alive connections."""
-    _HTTP_CLIENT.aclose()
+    """Close the shared HTTP client and drain keep-alive connections.
+
+    Runs synchronously — calls .close() which does NOT await, so any
+    pending coroutines are discarded. This is safe at shutdown since
+    no more requests will be made.
+    """
+    _HTTP_CLIENT.close()
 
 
 class OpenAICompatibleAdapter(BaseAdapter):
