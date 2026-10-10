@@ -13,7 +13,7 @@ import requests
 
 
 class TestHotReload:
-    def test_sighup_adds_new_model(self, proxy, write_config, tmp_path, backend_url):
+    def test_sighup_adds_new_model(self, proxy, write_config, backend_url):
         """After SIGHUP, new models from the updated config should appear."""
         port, proc = proxy
 

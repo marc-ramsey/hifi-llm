@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import requests
-import uuid
 
 
 class TestMetricsEndpoint:
@@ -53,6 +52,7 @@ class TestRequestID:
         resp = client.get("/health")
         assert "X-Request-ID" in resp.headers
         # Should be a valid UUID format
+        import uuid
         uuid.UUID(resp.headers["X-Request-ID"])
 
     def test_x_request_id_different_per_request(self, client):

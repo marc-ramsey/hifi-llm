@@ -277,8 +277,9 @@ def restart_health_probe(
         # Do NOT await old.result() here — SIGHUP handlers run on the main
         # thread and blocking would stall signal processing.  The cancelled
         # task will exit on its next sleep().
-    _health_task = None  # allow start_health_probe to create a fresh task
-    start_health_probe(models, interval=interval)
+    # Mark as done so start_health_probe's guard doesn't return early,
+    # but don't set to None (which would allow a double-call race).
+    _health_task = old
 
 
 def _current_report() -> HealthReport:

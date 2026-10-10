@@ -158,10 +158,8 @@ async def list_models():
 @router.post("/chat/completions")
 async def chat_completions(request: Request):
     """Proxy /v1/chat/completions. Stream or JSON, delegated to adapter."""
-    if not hasattr(request.state, "_request_body"):
-        await _resolve_and_merge(request)
-    body = request.state._request_body
-    if body.get("stream", False):
+    _, payload = await _resolve_and_merge(request)
+    if payload.get("stream", False):
         return await _forward_stream(request, "/v1/chat/completions")
     else:
         return await _forward_json(request, "/v1/chat/completions")
@@ -180,10 +178,8 @@ async def embeddings(request: Request):
 @router.post("/completions")
 async def completions(request: Request):
     """Proxy /v1/completions. Stream or JSON, delegated to adapter."""
-    if not hasattr(request.state, "_request_body"):
-        await _resolve_and_merge(request)
-    body = request.state._request_body
-    if body.get("stream", False):
+    _, payload = await _resolve_and_merge(request)
+    if payload.get("stream", False):
         return await _forward_stream(request, "/v1/completions")
     else:
         return await _forward_json(request, "/v1/completions")
