@@ -9,7 +9,7 @@ never raises; errors are yielded as SSE error chunks instead.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -65,10 +65,10 @@ async def _resolve_and_merge(request: Request):
 
 
 async def _forward_stream(request: Request, endpoint: str) -> StreamingResponse:
-    """SSE pass-through proxy.
+    """Raw SSE pass-through proxy.
 
     The adapter's forward_stream yields raw bytes (already SSE-formatted).
-    We buffer-split on newlines and forward complete SSE lines unchanged.
+    We forward them unchanged — no parsing, no splitting.
     Error handling is the adapter's responsibility — it never raises.
     """
     model_config, payload = await _resolve_and_merge(request)
@@ -80,27 +80,8 @@ async def _forward_stream(request: Request, endpoint: str) -> StreamingResponse:
         payload=payload,
     )
 
-    async def chunk_iterator() -> AsyncIterator[str]:
-        """Forward SSE lines from the backend unchanged."""
-        buffer = b""
-        async for chunk_bytes in stream:
-            buffer += chunk_bytes
-            while b"\n" in buffer:
-                line, buffer = buffer.split(b"\n", 1)
-                stripped = line.decode("utf-8").strip()
-                if stripped.startswith("data: "):
-                    data = stripped[6:]
-                    yield f"data: {data}\n\n"
-                    if data == "[DONE]":
-                        return
-                elif stripped.startswith("data:"):
-                    data = stripped[5:].lstrip()
-                    yield f"data:{data}\n\n"
-                    if data == "[DONE]":
-                        return
-
     return StreamingResponse(
-        chunk_iterator(),
+        stream,
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
