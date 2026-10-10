@@ -316,10 +316,10 @@ models:
 static_files:
   - path: "/docs"
     directories:
-      - {ROOT / "tests/fixtures/static_docs"}
+      - "{ROOT}/tests/fixtures/static_docs"
   - path: "/assets"
     directories:
-      - {ROOT / "tests/fixtures/assets"}
+      - "{ROOT}/tests/fixtures/assets"
 """
     )
 

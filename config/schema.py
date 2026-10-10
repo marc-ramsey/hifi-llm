@@ -22,7 +22,8 @@ class CORSConfig(BaseModel):
 
 
 class AuthConfig(BaseModel):
-    api_key: str | None = None
+    """Auth policy — either a single global key or a per-model map."""
+    api_key: str | dict[str, str] | None = None
 
 
 class RateLimitConfig(BaseModel):
@@ -67,17 +68,14 @@ class ModelConfig(BaseModel):
 
 
 class StaticFileConfig(BaseModel):
-    """Serve static files from one or more directories at a URL path."""
-    path: str = "/"
-    directories: list[Path]
+    """Serve static files from one or more directories at a URL path.
 
-    @field_validator("directories")
-    @classmethod
-    def validate_directories(cls, v: list[Path]) -> list[Path]:
-        for d in v:
-            if not d.is_dir():
-                raise ValueError(f"static_files directory does not exist: {d}")
-        return v
+    Directory existence is validated lazily at mount time (in create_app),
+    so missing dirs are skipped with a warning instead of crashing startup.
+    This also means static_files can be added via SIGHUP hot-reload.
+    """
+    path: str = "/"
+    directories: list[str]  # validated at mount time, not at parse time
 
 
 class ProxyConfig(BaseModel):

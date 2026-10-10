@@ -41,6 +41,6 @@ models:
 static_files:
   - path: "/docs"
     directories:
-      - ./docs
+      - ./docs  # directory existence checked at mount time; skipped with warning if missing
 
 health_check_interval: 2.0      # seconds between backend health probes

@@ -112,10 +112,13 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     # ── Static file serving ───────────────────────────────────────────────
 
     for sf in config.static_files:
-        for dir_path in sf.directories:
+        for dir_path_str in sf.directories:
+            dir_path = Path(dir_path_str)
             if dir_path.is_dir():
                 app.mount(sf.path, StaticFiles(directory=str(dir_path)))
                 logger.info("Serving static files at %s from %s", sf.path, dir_path)
+            else:
+                logger.warning("Static directory not found, skipping: %s", dir_path)
 
     app.state.metrics = metrics
 

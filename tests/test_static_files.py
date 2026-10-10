@@ -64,10 +64,10 @@ class TestStaticFiles:
 
 
 class TestStaticFilesInvalidConfig:
-    """Test that invalid static file configs are rejected."""
+    """Test that invalid static file configs are handled gracefully."""
 
-    def test_nonexistent_directory_rejected(self, proxy_config_dir, backend_url):
-        """A config referencing a non-existent directory should fail validation."""
+    def test_nonexistent_directory_skipped(self, proxy_config_dir, backend_url):
+        """A config referencing a non-existent directory is skipped with a warning; proxy still starts."""
         import subprocess
         import sys
         import os
@@ -110,6 +110,27 @@ static_files:
             text=True,
         )
 
-        # Wait briefly then check it exited
-        time.sleep(3)
-        assert proc.poll() is not None, "Proxy should have failed to start with invalid static_files directory"
+        # Wait for proxy to start (it should, skipping the missing dir)
+        ready = False
+        for _ in range(30):
+            try:
+                r = requests.get(f"http://127.0.0.1:{port}/health", timeout=2)
+                if r.status_code == 200:
+                    ready = True
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+
+        assert ready, "Proxy should start even with nonexistent static directory (skips it)"
+
+        # Verify the proxy is functional
+        resp = requests.get(f"http://127.0.0.1:{port}/v1/models")
+        assert resp.status_code == 200
+
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=3)

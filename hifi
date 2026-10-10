@@ -7,13 +7,17 @@ import os
 import sys
 from pathlib import Path
 
-_VENV_PYTHON = Path(__file__).resolve().parent / ".venv" / "bin" / "python"
+_VENV = Path(__file__).resolve().parent / ".venv"
+_BIN = _VENV / "bin"
 
 def main() -> None:
-    if not _VENV_PYTHON.exists():
-        print(f"Error: venv python not found at {_VENV_PYTHON}", file=sys.stderr)
+    if not (_BIN / "python").exists():
+        print(f"Error: venv python not found at {_BIN}/python", file=sys.stderr)
         sys.exit(1)
-    os.execv(str(_VENV_PYTHON), [str(_VENV_PYTHON), str(Path(__file__).resolve().parent / "main.py")] + sys.argv[1:])
+    # Prepend venv bin to PATH so tools (pip, pytest, uvicorn) are accessible
+    os.environ["PATH"] = str(_BIN) + os.pathsep + os.environ.get("PATH", "")
+    os.environ["VIRTUAL_ENV"] = str(_VENV)
+    os.execv(str(_BIN / "python"), [str(_BIN / "python"), str(Path(__file__).resolve().parent / "main.py")] + sys.argv[1:])
 
 if __name__ == "__main__":
     main()
