@@ -12,12 +12,15 @@ from dataclasses import dataclass, field
 logger = logging.getLogger(__name__)
 
 _KILL_TIMEOUT_S = 20.0
+_MAX_RESTARTS = 5          # max consecutive crashes before giving up
+_RESTART_WINDOW_S = 60     # time window for counting restarts
 
 
 @dataclass
 class _ProcessEntry:
     proc: subprocess.Popen[bytes]
     last_restart: float = field(default_factory=time.monotonic)
+    restart_times: list[float] = field(default_factory=list)
 
 
 class ProcessManager:
@@ -51,12 +54,31 @@ class ProcessManager:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            cls._processes[name] = _ProcessEntry(proc=proc)
+            # Preserve restart history if the key already exists (e.g. after
+            # a crash — start() is called by ensure_running on the same name).
+            existing = cls._processes.get(name)
+            if existing is not None:
+                existing.proc = proc
+                existing.last_restart = time.monotonic()
+            else:
+                cls._processes[name] = _ProcessEntry(proc=proc)
             logger.info("Started managed process '%s': %s", name, " ".join(cmd))
             return True
         except Exception as e:
             logger.error("Failed to start managed process '%s': %s", name, e)
             return False
+
+    @classmethod
+    def _prune_restart_times(cls, entry: _ProcessEntry) -> None:
+        """Remove restart timestamps older than the window."""
+        cutoff = time.monotonic() - _RESTART_WINDOW_S
+        entry.restart_times = [t for t in entry.restart_times if t > cutoff]
+
+    @classmethod
+    def _exceeded_restart_limit(cls, entry: _ProcessEntry) -> bool:
+        """Return True if the process has crashed too many times recently."""
+        cls._prune_restart_times(entry)
+        return len(entry.restart_times) >= _MAX_RESTARTS
 
     @classmethod
     def stop(cls, name: str) -> None:
@@ -78,6 +100,11 @@ class ProcessManager:
         If the process was restarted within *cooldown* seconds, skip and
         return False — avoids thrashing on a persistently failing server.
 
+        If the process has crashed more than _MAX_RESTARTS times within
+        _RESTART_WINDOW_S seconds, stop restarting entirely (returns False)
+        to prevent a self-DoS loop.  The counter resets when the process
+        stays alive for the full window duration.
+
         Args:
             name: Model name used as the process key.
             cmd: Command list to launch the server.
@@ -85,13 +112,15 @@ class ProcessManager:
 
         Returns:
             True if the process is running (or just started), False if
-            still in cooldown from a recent restart attempt.
+            still in cooldown or max restarts exceeded.
         """
         entry = cls._processes.get(name)
         if entry is not None and entry.proc.poll() is None:
             return True  # already running
 
         now = time.monotonic()
+
+        # Check cooldown first.
         if entry is not None and (now - entry.last_restart) < (cooldown or cls.COOLDOWN_SECONDS):
             logger.debug(
                 "Managed process '%s' in cooldown (%.1fs/<%.1fs)",
@@ -99,9 +128,19 @@ class ProcessManager:
             )
             return False
 
+        # Check restart limit — prevents self-DoS from a perpetually crashing server.
+        if entry is not None and cls._exceeded_restart_limit(entry):
+            logger.error(
+                "Managed process '%s' exceeded %d restarts in %.0fs — giving up",
+                name, _MAX_RESTARTS, _RESTART_WINDOW_S,
+            )
+            return False
+
         success = cls.start(name, cmd)
         if success:
-            cls._processes[name].last_restart = now
+            entry = cls._processes[name]
+            entry.last_restart = now
+            entry.restart_times.append(now)
         return success
 
     @classmethod

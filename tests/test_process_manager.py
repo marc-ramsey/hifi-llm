@@ -41,27 +41,41 @@ class _MockServerHandler(BaseHTTPRequestHandler):
         pass  # silence logs
 
 
-def _mock_server_script(port: int, ignore_sigterm: bool = False) -> str:
+def _mock_server_script(
+    port: int,
+    ignore_sigterm: bool = False,
+    crash_after: float | None = None,
+) -> str:
     """Return source code for a mock server subprocess.
 
     The script starts an HTTP server on *port*.  If *ignore_sigterm* is
     True it installs a no-op SIGTERM handler so the process survives the
-    initial signal and requires SIGKILL to terminate.
+    initial signal and requires SIGKILL to terminate.  If *crash_after*
+    is set, the process sleeps that many seconds then exits with code 1
+    (simulating an OOM crash or segfault).
     """
-    return (
-        f"import http.server, threading, signal, sys\n"
-        f"\n"
-        f"port = {port}\n"
-        f"ignore_sigterm = {ignore_sigterm!r}\n"
-        f"\n"
-        f"if ignore_sigterm:\n"
-        f"    signal.signal(signal.SIGTERM, lambda *a: None)\n"
-        f"\n"
-        f"srv = http.server.HTTPServer(('127.0.0.1', port), http.server.BaseHTTPRequestHandler)\n"
-        f"t = threading.Thread(target=srv.serve_forever, daemon=True)\n"
-        f"t.start()\n"
-        f"srv.serve_forever()\n"
-    )
+    lines = [
+        f"import http.server, threading, signal, sys, time",
+        "",
+        f"port = {port}",
+        f"ignore_sigterm = {ignore_sigterm!r}",
+        f"crash_after = {crash_after!r}",
+        "",
+    ]
+    if ignore_sigterm:
+        lines.append("signal.signal(signal.SIGTERM, lambda *a: None)")
+    lines.extend([
+        "",
+        "srv = http.server.HTTPServer(('127.0.0.1', port), http.server.BaseHTTPRequestHandler)",
+        "t = threading.Thread(target=srv.serve_forever, daemon=True)",
+        "t.start()",
+    ])
+    if crash_after is not None:
+        lines.append(f"time.sleep({crash_after})")
+        lines.append("sys.exit(1)")  # simulate crash
+    else:
+        lines.append("srv.serve_forever()")
+    return "\n".join(lines) + "\n"
 
 
 def _make_mock_server(cmd: list[str]) -> subprocess.Popen:
@@ -235,3 +249,78 @@ class TestShutdownSIGTERM:
         finally:
             os.unlink(path1)
             os.unlink(path2)
+
+
+class TestAutoRestart:
+    """Tests for process auto-restart after server failure."""
+
+    def test_ensure_restarts_dead_process(self):
+        """When a managed process dies, ensure_running relaunches it."""
+        port = _find_free_port()
+        # Server crashes after 0.5s (simulates OOM / segfault)
+        script = _mock_server_script(port, crash_after=0.5)
+        with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
+            f.write(script)
+            script_path = f.name
+
+        try:
+            cmd = [sys.executable, script_path]
+
+            # Start the process and let it die.
+            ProcessManager.start("crash-proc", cmd)
+            assert ProcessManager.is_running("crash-proc") is True
+
+            # Wait for it to crash.
+            time.sleep(1.0)
+            assert ProcessManager.is_running("crash-proc") is False
+
+            # ensure_running should detect it's dead and restart it.
+            result = ProcessManager.ensure_running(
+                "crash-proc", cmd, cooldown=0.1,
+            )
+            assert result is True
+            assert ProcessManager.is_running("crash-proc") is True
+        finally:
+            os.unlink(script_path)
+            # Clean up the restarted process.
+            asyncio.run(ProcessManager.shutdown())
+
+    def test_restart_limit_prevents_self_dos(self):
+        """After too many crashes in a short window, stop restarting."""
+        import proxy.process_manager as pm
+        original_window = pm._RESTART_WINDOW_S
+        original_max = pm._MAX_RESTARTS
+
+        # Use tight values for the test.
+        pm._RESTART_WINDOW_S = 5.0
+        pm._MAX_RESTARTS = 3
+
+        port = _find_free_port()
+        script = _mock_server_script(port, crash_after=0.2)
+        with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
+            f.write(script)
+            script_path = f.name
+
+        try:
+            cmd = [sys.executable, script_path]
+
+            # Crash 3 times (hits the limit).
+            for i in range(3):
+                ProcessManager.start("limit-proc", cmd)
+                time.sleep(0.5)  # let it crash
+                assert ProcessManager.is_running("limit-proc") is False
+                result = ProcessManager.ensure_running("limit-proc", cmd, cooldown=0.1)
+                assert result is True, f"Restart {i+1} should succeed"
+
+            # 4th attempt — should be blocked by restart limit.
+            time.sleep(0.5)  # let the last one crash
+            result = ProcessManager.ensure_running("limit-proc", cmd, cooldown=0.1)
+            assert result is False, "Should not restart after hitting limit"
+
+            # No new process was spawned — registry still has the dead entry.
+            assert ProcessManager.is_running("limit-proc") is False
+        finally:
+            pm._RESTART_WINDOW_S = original_window
+            pm._MAX_RESTARTS = original_max
+            os.unlink(script_path)
+            asyncio.run(ProcessManager.shutdown())
