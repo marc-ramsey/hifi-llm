@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
-import socket
 import subprocess
 import sys
 import tempfile
@@ -15,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
+from .conftest import find_free_port
 from proxy.process_manager import ProcessManager
 
 
@@ -22,14 +22,6 @@ from proxy.process_manager import ProcessManager
 # Mock server — a real process that can be configured to handle or ignore
 # SIGTERM, and serves a minimal HTTP endpoint.
 # ────────────────────────────────────────────────────────────────────────
-
-def _find_free_port() -> int:
-    """Find an available TCP port."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        s.listen(1)
-        return s.getsockname()[1]
-
 
 class _MockServerHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -162,7 +154,7 @@ class TestShutdownSIGTERM:
 
     def test_graceful_sigterm_exit(self):
         """A process that handles SIGTERM exits within the timeout."""
-        port = _find_free_port()
+        port = find_free_port()
         script = _mock_server_script(port, ignore_sigterm=False)
         with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
             f.write(script)
@@ -181,7 +173,7 @@ class TestShutdownSIGTERM:
 
     def test_sigterm_escalates_to_sigkill(self):
         """A process that ignores SIGTERM is killed with SIGKILL after timeout."""
-        port = _find_free_port()
+        port = find_free_port()
         script = _mock_server_script(port, ignore_sigterm=True)
         with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
             f.write(script)
@@ -209,8 +201,8 @@ class TestShutdownSIGTERM:
 
     def test_shutdown_parallel(self):
         """Multiple stubborn processes are killed in parallel, not serially."""
-        port1 = _find_free_port()
-        port2 = _find_free_port()
+        port1 = find_free_port()
+        port2 = find_free_port()
         script1 = _mock_server_script(port1, ignore_sigterm=True)
         script2 = _mock_server_script(port2, ignore_sigterm=True)
 
@@ -256,7 +248,7 @@ class TestAutoRestart:
 
     def test_ensure_restarts_dead_process(self):
         """When a managed process dies, ensure_running relaunches it."""
-        port = _find_free_port()
+        port = find_free_port()
         # Server crashes after 0.5s (simulates OOM / segfault)
         script = _mock_server_script(port, crash_after=0.5)
         with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
@@ -295,7 +287,7 @@ class TestAutoRestart:
         pm._RESTART_WINDOW_S = 5.0
         pm._MAX_RESTARTS = 3
 
-        port = _find_free_port()
+        port = find_free_port()
         script = _mock_server_script(port, crash_after=0.2)
         with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
             f.write(script)

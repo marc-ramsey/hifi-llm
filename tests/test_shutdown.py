@@ -14,25 +14,7 @@ from pathlib import Path
 import pytest
 import requests
 
-from .conftest import ROOT
-
-
-def _parse_sse(raw_text):
-    """Parse SSE lines, return (chunks, done)."""
-    chunks = []
-    for line in raw_text.replace("\r", "").split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith("data: "):
-            data = line[6:].strip()
-            if data == "[DONE]":
-                return chunks, True
-            try:
-                chunks.append(json.loads(data))
-            except ValueError:
-                pass
-    return chunks, False
+from .conftest import ROOT, parse_sse_chunks
 
 
 class TestGracefulShutdown:
@@ -58,7 +40,7 @@ class TestGracefulShutdown:
 
         # Read what we have so far (blocking, but stream will eventually complete)
         raw = stream_resp.content.decode("utf-8", errors="replace")
-        chunks, done = _parse_sse(raw)
+        chunks, done = parse_sse_chunks(raw)
 
         # Send SIGTERM while we have the response
         proc.send_signal(signal.SIGTERM)
@@ -68,7 +50,7 @@ class TestGracefulShutdown:
             remaining = stream_resp.read(timeout=5)
             if remaining:
                 full_text = raw + remaining.decode("utf-8", errors="replace")
-                chunks2, done2 = _parse_sse(full_text)
+                chunks2, done2 = parse_sse_chunks(full_text)
                 if done2:
                     done = done2
                     chunks = chunks2

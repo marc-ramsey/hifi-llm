@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import subprocess
 import threading
 import time
@@ -116,9 +117,6 @@ def mock_server():
     time.sleep(0.3)  # let it bind
     yield server, port
     server.stop()
-
-
-import socket
 
 
 # ────────────────────────────────────────────────────────────────────────

@@ -10,6 +10,7 @@ This removes all dependency on external services (Arkestra, port :8080).
 from __future__ import annotations
 
 import json
+import socket
 import os
 import signal
 import socket
@@ -25,6 +26,41 @@ import pytest
 import requests
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Shared test utilities
+# ────────────────────────────────────────────────────────────────────────
+
+def find_free_port() -> int:
+    """Find an available TCP port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        s.listen(1)
+        port = s.getsockname()[1]
+    return port
+
+
+def parse_sse_chunks(raw_text: str):
+    """Parse SSE data lines into a list of dicts and a done-flag.
+
+    Returns ``(chunks, done)`` where *done* is True when a ``[DONE]``
+    sentinel was encountered.
+    """
+    chunks: list[dict] = []
+    for line in raw_text.replace("\r", "").split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("data: "):
+            data = line[6:].strip()
+            if data == "[DONE]":
+                return chunks, True
+            try:
+                chunks.append(json.loads(data))
+            except ValueError:
+                pass
+    return chunks, False
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -140,15 +176,6 @@ class _BackendHandler(BaseHTTPRequestHandler):
         pass
 
 
-def _find_free_port() -> int:
-    """Find an available TCP port."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        s.listen(1)
-        port = s.getsockname()[1]
-    return port
-
-
 def _start_proxy(port: int, config_path: Path, cwd: Path = ROOT) -> subprocess.Popen:
     """Start the hifi proxy as a subprocess and wait for it to be ready.
 
@@ -199,7 +226,7 @@ def backend():
 
     Yields (host, port).  Teardown after the session.
     """
-    port = _find_free_port()
+    port = find_free_port()
     server = HTTPServer(("127.0.0.1", port), _BackendHandler)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
@@ -229,7 +256,7 @@ def proxy(proxy_config_dir, backend_url):
 
     Yields (port, proc).  Teardown after the session.
     """
-    port = _find_free_port()
+    port = find_free_port()
 
     config_path = proxy_config_dir / "proxy-config.yaml"
     config_path.write_text(
@@ -301,7 +328,7 @@ def proxy_with_static(proxy_config_dir, backend_url):
 
     Yields (port, proc).  Teardown after the session.
     """
-    port = _find_free_port()
+    port = find_free_port()
 
     config_path = proxy_config_dir / "proxy-config-static.yaml"
     config_path.write_text(

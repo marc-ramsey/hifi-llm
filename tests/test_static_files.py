@@ -65,9 +65,9 @@ class TestStaticFilesInvalidConfig:
 
     def test_nonexistent_directory_skipped(self, proxy_config_dir, backend_url):
         """A config referencing a non-existent directory is skipped with a warning; proxy still starts."""
-        from tests.conftest import _find_free_port, _start_proxy, ROOT
+        from tests.conftest import ROOT, find_free_port, parse_sse_chunks, _start_proxy
 
-        port = _find_free_port()
+        port = find_free_port()
         config_path = proxy_config_dir / "proxy-config.yaml"
         config_path.write_text(
             f"""

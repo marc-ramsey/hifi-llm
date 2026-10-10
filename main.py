@@ -107,11 +107,15 @@ def run(config_path: str | None = None) -> None:
         try:
             await _server.serve()
         finally:
-            # All three shutdown steps are fire-and-forget — no blocking,
-            # each runs in parallel, and none waits on another.
+            # Health probe stops synchronously; process manager and HTTP
+            # clients shut down in parallel, awaited so exceptions aren't
+            # silently lost and cleanup completes before exit.
             stop_health_probe()  # synchronous cancellation, returns immediately
-            asyncio.create_task(ProcessManager.shutdown())
-            asyncio.create_task(close_http_client())
+            await asyncio.gather(
+                ProcessManager.shutdown(),
+                close_http_client(),
+                return_exceptions=True,
+            )
 
     asyncio.run(_serve_and_cleanup())
 

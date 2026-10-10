@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from .conftest import ROOT
+from .conftest import ROOT, parse_sse_chunks
 
 
 def _is_openai_chat_completion(resp_json):
@@ -33,24 +33,6 @@ def _is_openai_chat_completion_chunk(resp_json):
     assert resp_json["object"] == "chat.completion.chunk"
     assert len(resp_json["choices"]) >= 1
     assert "delta" in resp_json["choices"][0]
-
-
-def _parse_sse_chunks(raw_text):
-    """Parse SSE data: lines from a streaming response into a list of dicts."""
-    chunks = []
-    for line in raw_text.replace("\r", "").split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith("data: "):
-            data = line[6:].strip()
-            if data == "[DONE]":
-                return chunks, True
-            try:
-                chunks.append(json.loads(data))
-            except ValueError:
-                pass
-    return chunks, False
 
 
 class TestHealth:
@@ -141,7 +123,7 @@ class TestChatCompletionsStreaming:
         assert resp.status_code == 200
         assert "text/event-stream" in resp.headers["Content-Type"]
 
-        chunks, done = _parse_sse_chunks(resp.text)
+        chunks, done = parse_sse_chunks(resp.text)
         assert done is True
         assert len(chunks) >= 1
 
@@ -158,7 +140,7 @@ class TestChatCompletionsStreaming:
             "stream": True,
         })
         assert resp.status_code == 200
-        chunks, done = _parse_sse_chunks(resp.text)
+        chunks, done = parse_sse_chunks(resp.text)
         assert done is True
         text = "".join(
             c["choices"][0]["delta"].get("content") or ""
