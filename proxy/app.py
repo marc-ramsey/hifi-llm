@@ -64,7 +64,8 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     from .middleware.request_id import RequestIDMiddleware
     app.add_middleware(RequestIDMiddleware)
 
-    metrics = _get_metrics_store()
+    from proxy.metrics import get_metrics_store
+    metrics = get_metrics_store()
     from .middleware.access_log import AccessLogMiddleware
     app.add_middleware(AccessLogMiddleware, metrics=metrics)
 
@@ -115,9 +116,3 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     app.state.metrics = metrics
 
     return app
-
-
-def _get_metrics_store():
-    """Return the singleton MetricsStore (survives SIGHUP reloads)."""
-    from proxy.metrics import get_metrics_store
-    return get_metrics_store()

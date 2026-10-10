@@ -13,9 +13,9 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from config import get
 from adapters import get_adapter
-from adapters.base import make_error_response
+from adapters.base import BaseAdapter, make_error_response
+from config import get
 from proxy.health import _current_report
 
 logger = logging.getLogger(__name__)
@@ -75,20 +75,25 @@ async def _resolve_and_merge(request: Request):
     return model_config, payload
 
 
-async def _forward_stream(request: Request, endpoint: str) -> StreamingResponse:
+def _make_adapter(model_config) -> BaseAdapter:
+    """Create an adapter instance from a model config."""
+    return get_adapter(
+        model_config.backend,
+        api_key=model_config.api_key,
+        model_config=model_config,
+    )
+
+
+async def _forward_stream(model_config, request: Request, endpoint: str) -> StreamingResponse:
     """Raw SSE pass-through proxy.
 
     The adapter's forward_stream yields raw bytes (already SSE-formatted).
     We forward them unchanged — no parsing, no splitting.
     Error handling is the adapter's responsibility — it never raises.
     """
-    model_config, payload = await _resolve_and_merge(request)
+    payload = request.state._request_body
+    adapter = _make_adapter(model_config)
 
-    adapter = get_adapter(
-        model_config.backend,
-        api_key=model_config.api_key,
-        model_config=model_config,
-    )
     stream = adapter.forward_stream(
         url=model_config.url,
         endpoint=endpoint,
@@ -107,15 +112,11 @@ async def _forward_stream(request: Request, endpoint: str) -> StreamingResponse:
     )
 
 
-async def _forward_json(request: Request, endpoint: str) -> JSONResponse:
+async def _forward_json(model_config, request: Request, endpoint: str) -> JSONResponse:
     """Generic JSON proxy for any endpoint."""
-    model_config, payload = await _resolve_and_merge(request)
+    payload = request.state._request_body
+    adapter = _make_adapter(model_config)
 
-    adapter = get_adapter(
-        model_config.backend,
-        api_key=model_config.api_key,
-        model_config=model_config,
-    )
     response = await adapter.forward_json(
         url=model_config.url,
         endpoint=endpoint,
@@ -159,11 +160,11 @@ async def list_models():
 @router.post("/chat/completions", summary="Create chat completion", description="Creates a model response for the given conversation. The request body is forwarded to the backend after merging per-model default parameters (temperature, top_p, etc.). Supports both streaming and non-streaming responses.", responses={400: {"description": "Invalid model or request"}, 502: {"description": "Backend error"}})
 async def chat_completions(request: Request):
     """Proxy /v1/chat/completions. Stream or JSON, delegated to adapter."""
-    _, payload = await _resolve_and_merge(request)
+    model_config, payload = await _resolve_and_merge(request)
     if payload.get("stream", False):
-        return await _forward_stream(request, "/v1/chat/completions")
+        return await _forward_stream(model_config, request, "/v1/chat/completions")
     else:
-        return await _forward_json(request, "/v1/chat/completions")
+        return await _forward_json(model_config, request, "/v1/chat/completions")
 
 
 # ── POST /v1/embeddings ─────────────────────────────────────────────────────
@@ -171,7 +172,8 @@ async def chat_completions(request: Request):
 @router.post("/embeddings", summary="Create embeddings", description="Creates an embedding vector representing the input text. The request is forwarded to the configured embedding model backend.", responses={400: {"description": "Invalid model or request"}, 502: {"description": "Backend error"}})
 async def embeddings(request: Request):
     """Proxy /v1/embeddings to the backend."""
-    return await _forward_json(request, "/v1/embeddings")
+    model_config, _ = await _resolve_and_merge(request)
+    return await _forward_json(model_config, request, "/v1/embeddings")
 
 
 # ── POST /v1/completions (legacy) ───────────────────────────────────────────
@@ -179,8 +181,8 @@ async def embeddings(request: Request):
 @router.post("/completions", summary="Create legacy completion (deprecated)", description="Creates a completion for the provided prompt and parameters. Deprecated — use /chat/completions instead.", responses={400: {"description": "Invalid model or request"}, 502: {"description": "Backend error"}})
 async def completions(request: Request):
     """Proxy /v1/completions. Stream or JSON, delegated to adapter."""
-    _, payload = await _resolve_and_merge(request)
+    model_config, payload = await _resolve_and_merge(request)
     if payload.get("stream", False):
-        return await _forward_stream(request, "/v1/completions")
+        return await _forward_stream(model_config, request, "/v1/completions")
     else:
-        return await _forward_json(request, "/v1/completions")
+        return await _forward_json(model_config, request, "/v1/completions")
