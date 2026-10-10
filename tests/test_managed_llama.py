@@ -97,9 +97,10 @@ class _MockLlamaHandler(BaseHTTPRequestHandler):
 
 @pytest.fixture(autouse=True)
 def _reset_process_manager():
-    ProcessManager.shutdown()
+    import asyncio
+    asyncio.run(ProcessManager.shutdown())
     yield
-    ProcessManager.shutdown()
+    asyncio.run(ProcessManager.shutdown())
 
 
 @pytest.fixture(scope="module")

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import signal
 import subprocess
 import time
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
+
+_KILL_TIMEOUT_S = 20.0
 
 
 @dataclass
@@ -101,10 +105,38 @@ class ProcessManager:
         return success
 
     @classmethod
-    def shutdown(cls) -> None:
-        """Terminate all managed processes."""
-        for name, entry in list(cls._processes.items()):
-            if entry.proc.poll() is None:
-                entry.proc.terminate()
-                logger.info("Stopped managed process '%s' at shutdown", name)
+    async def shutdown(cls) -> None:
+        """Terminate all managed processes with SIGTERM→SIGKILL escalation.
+
+        No blocking calls — everything runs via asyncio.create_task so the
+        caller returns immediately.  Each process is terminated in parallel;
+        after *kill_timeout* seconds any still-alive processes are SIGKILLed.
+        """
+        entries = list(cls._processes.items())
         cls._processes.clear()
+
+        if not entries:
+            return
+
+        async def _kill_one(name: str, proc: subprocess.Popen[bytes]) -> None:
+            if proc.poll() is not None:
+                return  # already dead
+            logger.info("Stopping managed process '%s' at shutdown", name)
+            proc.send_signal(signal.SIGTERM)
+            try:
+                loop = asyncio.get_running_loop()
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, proc.communicate),
+                    timeout=_KILL_TIMEOUT_S,
+                )
+            except (asyncio.TimeoutError, subprocess.TimeoutExpired):
+                logger.warning(
+                    "Managed process '%s' did not exit after %ds — SIGKILLing",
+                    name, _KILL_TIMEOUT_S,
+                )
+                proc.kill()
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, proc.communicate)
+
+        tasks = [_kill_one(name, entry.proc) for name, entry in entries]
+        await asyncio.gather(*tasks)

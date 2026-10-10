@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
+
+import pytest
 
 from proxy.process_manager import ProcessManager
 
@@ -12,7 +15,7 @@ class TestProcessManager:
 
     def setup_method(self):
         """Reset state before each test."""
-        ProcessManager.shutdown()
+        asyncio.run(ProcessManager.shutdown())
 
     def test_is_running_returns_false_for_unknown(self):
         assert ProcessManager.is_running("nonexistent") is False
@@ -62,6 +65,6 @@ class TestProcessManager:
         ProcessManager.start("proc-b", cmd)
         assert ProcessManager.is_running("proc-a") is True
         assert ProcessManager.is_running("proc-b") is True
-        ProcessManager.shutdown()
+        asyncio.run(ProcessManager.shutdown())
         assert ProcessManager.is_running("proc-a") is False
         assert ProcessManager.is_running("proc-b") is False
