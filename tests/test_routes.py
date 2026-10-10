@@ -5,8 +5,6 @@ Tests against a real threaded HTTP backend server via the proxy.
 
 from __future__ import annotations
 
-import re
-
 import pytest
 
 from .conftest import ROOT

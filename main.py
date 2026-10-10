@@ -1,7 +1,5 @@
 """Simple LLM Proxy — entry point with signal handling."""
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import signal

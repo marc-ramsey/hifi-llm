@@ -19,9 +19,7 @@ Metrics exposed::
 from __future__ import annotations
 
 import logging
-import time
 from collections import defaultdict
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
