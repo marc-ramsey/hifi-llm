@@ -27,6 +27,11 @@ def register_adapter(name: str) -> Any:
     return wrapper
 
 
+def get_adapter_class(backend: str) -> type[BaseAdapter]:
+    """Return the adapter class for *backend*, or the fallback."""
+    return _registry.get(backend, OpenAICompatibleAdapter)
+
+
 def get_adapter(
     backend: str,
     api_key: str | None = None,
@@ -73,5 +78,5 @@ register_adapter("managed_llama")(ManagedLlamaAdapter)
 __all__ = [
     "BaseAdapter", "BackendError",
     "LlamaCppAdapter", "ManagedLlamaAdapter", "OpenAICompatibleAdapter",
-    "get_adapter", "register_adapter",
+    "get_adapter", "get_adapter_class", "register_adapter",
 ]

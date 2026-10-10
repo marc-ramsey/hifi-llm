@@ -127,7 +127,10 @@ class OpenAICompatibleAdapter(BaseAdapter):
     Subclasses can customise behaviour by overriding:
         _build_headers(api_key)   — add extra request headers
         _normalise_response(data) — transform non-OpenAI responses
+        PROVIDER                  — identity string for /v1/models display
     """
+
+    PROVIDER: str = "openai_compatible"
 
     def __init__(self, api_key: str | None = None) -> None:
         self._api_key = api_key

@@ -21,8 +21,7 @@ rate_limit:           # per-IP sliding window rate limiting (disabled by default
 models:
   - name: "fast-agent"
     url: "http://backend:8080"
-    provider: llama.cpp          # display hint for frontends like OWUI
-    backend: openai_compatible   # adapter type selector
+    backend: openai_compatible   # adapter type (also supplies provider)
     api_key: null                # optional per-model backend auth token (${VAR} expanded)
     default_params:
       temperature: 0.7
@@ -30,7 +29,7 @@ models:
 
   - name: "slow-thinker"
     url: "http://backend:8081"
-    provider: llama.cpp
+    backend: llama_cpp           # adapter type (also supplies provider)
     default_params:
       temperature: 0.7
       top_p: 0.9

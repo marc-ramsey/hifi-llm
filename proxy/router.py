@@ -13,7 +13,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from adapters import get_adapter
+from adapters import get_adapter, get_adapter_class
 from adapters.base import BaseAdapter, make_error_response
 from config import get
 from proxy.health import _current_report
@@ -138,14 +138,14 @@ async def list_models():
     models = get().models
     data = []
     for m in models:
+        adapter_cls = get_adapter_class(m.backend)
         entry: dict = {
             "id": m.name,
             "object": "model",
             "created": 0,
             "owned_by": m.backend,
+            "provider": adapter_cls.PROVIDER,
         }
-        if m.provider:
-            entry["provider"] = m.provider
         bh = health_map.get(m.name)
         if bh:
             status_value = "loaded" if bh.status.value == "healthy" else "unloaded"

@@ -18,6 +18,7 @@ from .base import BaseAdapter, OpenAICompatibleAdapter
 class LlamaCppAdapter(OpenAICompatibleAdapter):
     """Adapter for llama.cpp's llama-server HTTP API."""
 
+    PROVIDER = "llama.cpp"
     PROVIDER_HEADER = "X-Provider"
     PROVIDER_VALUE = "llama.cpp"
 
