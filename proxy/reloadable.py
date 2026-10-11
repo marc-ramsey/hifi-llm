@@ -14,6 +14,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Awaitable, Callable
 
+from config import get as get_config
+
 from proxy.app import create_app
 from proxy.health import start_health_probe
 
@@ -44,15 +46,18 @@ class ConfigReloadableApp:
                 build.  If None, ``create_app()`` reads from the global
                 config registry (which must already be loaded).
         """
+        # _app stays None until the first request (or reload) builds it; until
+        # then uvicorn never touches it.  _config tracks the config the current
+        # (or next) app was built from, and is refreshed by reload().
         self._app: Any = None
-        self._initial_config = initial_config
         self._initialized = False
         self._config = initial_config
 
     async def __call__(self, scope: dict[str, Any], receive: ASGIReceive, send: ASGISend) -> None:
         if not self._initialized:
-            # First request — build the initial app from current config.
-            self._app = create_app(self._initial_config)
+            # First request — build the initial app from current config
+            # (refreshed by reload() if a SIGHUP arrived before any request).
+            self._app = create_app(self._config)
             self._initialized = True
             # Start the health probe now that we have a running event loop.
             # If called before a loop existed (e.g. __init__), start_health_probe
@@ -68,11 +73,17 @@ class ConfigReloadableApp:
         locks needed because CPython's GIL makes single-assignment swaps
         atomic, and the FastAPI app is immutable after construction.
 
+        The fresh app is built from the *global* config registry, which
+        ``main._reload`` has already repopulated — passing a cached config
+        here would silently make the reload a no-op.
+
         Note: health probe restart is handled by main.py._reload() via
         restart_health_probe(), not here — avoiding duplicate start calls.
         """
         old_app = self._app
-        self._app = create_app()
+        self._config = get_config()
+        self._app = create_app(self._config)
+        self._initialized = True
         if old_app is not None:
             logger.info("Replaced ASGI app with fresh instance from updated config")
 

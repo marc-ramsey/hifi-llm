@@ -133,6 +133,11 @@ Send `SIGHUP` to reload the config file without restarting:
 kill -HUP $(lsof -ti:8080)
 ```
 
+The new file is validated first — if it does not parse, the error is logged and
+the running config stays in place. The app is then rebuilt, so model list,
+frontend and backend auth keys, health-probe targets, rate limiting, CORS and
+static mounts all take effect. In-flight requests finish on the old config.
+
 ## Static Files
 
 Serve files from filesystem directories at configured URL paths:

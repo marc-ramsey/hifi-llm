@@ -18,9 +18,17 @@ logger = logging.getLogger(__name__)
 def create_app(config: ProxyConfig | None = None) -> FastAPI:
     """Create and configure the FastAPI application.
 
-    Each call builds a fresh app from the provided config (or the current
-    global config if *config* is None).  Idempotent — safe to call on SIGHUP.
+    Each call builds a fresh app from *config*, or from the current global
+    config when *config* is None.  Reading the config once into ``cfg`` and
+    using it for *every* read is what makes a SIGHUP reload effective:
+    ``ConfigReloadableApp.reload()`` swaps in a freshly loaded config and then
+    rebuilds the app, so CORS, rate limiting, auth and static mounts all change
+    with it.  Idempotent.
+
+    Raises:
+        RuntimeError: if *config* is None and no config has been loaded yet.
     """
+    cfg = config if config is not None else get()
 
     # ── App scaffold ──────────────────────────────────────────────────────
 
@@ -52,7 +60,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     from .middleware.body_size import BodySizeMiddleware
     app.add_middleware(BodySizeMiddleware)
 
-    cors_cfg = config.cors if config else get().cors
+    cors_cfg = cfg.cors
     if cors_cfg.enabled:
         app.add_middleware(
             CORSMiddleware,
@@ -70,7 +78,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     app.add_middleware(AccessLogMiddleware, metrics=metrics)
 
     from .middleware.rate_limit import RateLimitMiddleware
-    rate_cfg = config.rate_limit if config else get().rate_limit
+    rate_cfg = cfg.rate_limit
     app.add_middleware(RateLimitMiddleware, config=rate_cfg, metrics=metrics)
 
     from .middleware.auth import AuthMiddleware
@@ -104,7 +112,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
 
     # ── Static file serving ───────────────────────────────────────────────
 
-    for sf in config.static_files:
+    for sf in cfg.static_files:
         for dir_path_str in sf.directories:
             dir_path = Path(dir_path_str)
             if dir_path.is_dir():

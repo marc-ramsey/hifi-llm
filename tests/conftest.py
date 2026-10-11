@@ -25,6 +25,8 @@ from pathlib import Path
 import pytest
 import requests
 
+import config as config_registry
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -369,6 +371,20 @@ static_files:
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait(timeout=5)
+
+
+@pytest.fixture
+def restore_config():
+    """Restore the global config registry after an in-process test.
+
+    Tests that call ``config.set()`` directly would otherwise leak their
+    config into later tests in the same process.
+    """
+    saved = config_registry._current
+    try:
+        yield
+    finally:
+        config_registry._current = saved
 
 
 @pytest.fixture
