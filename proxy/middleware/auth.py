@@ -10,10 +10,26 @@ Supports two modes:
   - Single string: all requests must use that Bearer token (global key).
   - Dict: keys are model names, values are per-model tokens.  The proxy
     reads the ``model`` field from the request body to pick the right key.
+    Requests that carry no model name (``GET /v1/models``, ``/docs``, a body
+    that is not JSON, …) are matched against the ``"*"`` entry when one is
+    configured — use it to let frontends list the catalogue:
+
+        auth:
+          api_key:
+            "*": "catalogue-key"     # any request without a model
+            "fast-agent": "key-a"
+
+    With no ``"*"`` entry, model-less requests are rejected.
+
+``PUBLIC_PATHS`` is served without credentials — uptime monitors and process
+managers must be able to reach ``/health`` without a token.
+
+Token comparison is constant-time (``hmac.compare_digest``).
 """
 
 from __future__ import annotations
 
+import hmac
 import logging
 
 from fastapi import Request
@@ -23,6 +39,22 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from config import get
 
 logger = logging.getLogger("llm-proxy.auth")
+
+# Dict-mode key matching requests that carry no model name.
+WILDCARD_KEY = "*"
+
+# Paths served without authentication.  /metrics deliberately stays protected
+# (it exposes traffic data); /health is infrastructure and is also exempt from
+# rate limiting.
+PUBLIC_PATHS = frozenset({"/health"})
+
+
+def _token_matches(supplied: str, expected: str) -> bool:
+    """Compare tokens without leaking a prefix match through timing."""
+    return hmac.compare_digest(
+        supplied.encode("utf-8", "surrogateescape"),
+        expected.encode("utf-8", "surrogateescape"),
+    )
 
 
 def _unauthorized_response() -> JSONResponse:
@@ -42,6 +74,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if not api_key:
             return await call_next(request)
 
+        # Infrastructure endpoints are reachable without credentials.
+        if request.url.path in PUBLIC_PATHS:
+            return await call_next(request)
+
         # Resolve the model name.  It may already be parsed by a prior middleware;
         # otherwise parse it from the request body now (cheap JSON parse, cached on
         # request.state so downstream handlers don't re-parse).
@@ -57,10 +93,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         if isinstance(api_key, dict):
             # Per-model mode — read model name from request body.
-            if model_name and model_name in api_key:
-                expected_key = api_key[model_name]
-            else:
-                # Unknown model — reject (no fallback key configured for it).
+            expected_key = api_key.get(model_name) if model_name else None
+            if expected_key is None and not model_name:
+                # No model in this request — fall back to the wildcard entry.
+                expected_key = api_key.get(WILDCARD_KEY)
+            if expected_key is None:
+                # Unknown model, or no model and no wildcard configured.
                 return _unauthorized_response()
         else:
             # Global key mode.
@@ -69,7 +107,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         auth = request.headers.get("Authorization", "")
         expected = f"Bearer {expected_key}"
 
-        if auth != expected:
+        if not _token_matches(auth, expected):
             return _unauthorized_response()
 
         return await call_next(request)

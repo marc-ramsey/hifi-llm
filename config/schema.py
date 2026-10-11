@@ -101,6 +101,12 @@ class ProxyConfig(BaseModel):
     models: list[ModelConfig] = Field(default_factory=list)
     static_files: list[StaticFileConfig] = Field(default_factory=list)
     health_check_interval: float = Field(default=2.0, gt=0, description="Seconds between backend health probes")
+    max_body_size_mb: float = Field(
+        default=10.0,
+        gt=0,
+        description="Largest request body accepted (MB). Larger bodies get HTTP 413. "
+                    "Enforced on Content-Length and, for chunked uploads, while reading.",
+    )
 
     @field_validator("models")
     @classmethod

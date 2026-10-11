@@ -18,6 +18,8 @@ rate_limit:           # per-IP sliding window rate limiting (disabled by default
     "/v1/chat/completions": 30   # stricter for heavy endpoint
     "/v1/embeddings": 20
 
+max_body_size_mb: 10  # request bodies larger than this are answered with 413
+
 models:
   - name: "fast-agent"
     url: "http://backend:8080"

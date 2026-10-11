@@ -15,15 +15,61 @@ from config import ProxyConfig, get
 logger = logging.getLogger(__name__)
 
 
+def _middleware_stack(cfg: ProxyConfig, metrics) -> list[tuple[type, dict]]:
+    """The middleware stack in **execution order** (outermost first).
+
+        RequestID → AccessLog → BodySize → CORS → RateLimit → Auth → routes
+
+    Why this order:
+        RequestID   outermost, so *every* response — including 413/429/401 —
+                    carries X-Request-ID and access logs can be correlated.
+        AccessLog   outside RateLimit/Auth so rejected requests are logged too.
+        BodySize    before anything reads the body: auth parses the JSON body
+                    for the model name, so the cap must be enforced first.
+        CORS        outside Auth, otherwise browser preflights (which never
+                    carry an Authorization header) get a 401.
+        RateLimit   before Auth so credential guessing is itself throttled.
+        Auth        innermost; runs immediately before routing.
+
+    ``create_app`` registers these in reverse: Starlette's ``add_middleware``
+    prepends, so the last one added is the outermost.
+    """
+    from .middleware.access_log import AccessLogMiddleware
+    from .middleware.auth import AuthMiddleware
+    from .middleware.body_size import BodySizeMiddleware
+    from .middleware.rate_limit import RateLimitMiddleware
+    from .middleware.request_id import RequestIDMiddleware
+
+    stack: list[tuple[type, dict]] = [
+        (RequestIDMiddleware, {}),
+        (AccessLogMiddleware, {"metrics": metrics}),
+        (BodySizeMiddleware, {"max_body_bytes": int(cfg.max_body_size_mb * 1024 * 1024)}),
+    ]
+
+    if cfg.cors.enabled:
+        stack.append((
+            CORSMiddleware,
+            {
+                "allow_origins": cfg.cors.allow_origins,
+                "allow_methods": cfg.cors.allow_methods,
+                "allow_headers": cfg.cors.allow_headers,
+            },
+        ))
+
+    stack.append((RateLimitMiddleware, {"config": cfg.rate_limit, "metrics": metrics}))
+    stack.append((AuthMiddleware, {}))
+
+    return stack
+
+
 def create_app(config: ProxyConfig | None = None) -> FastAPI:
     """Create and configure the FastAPI application.
 
-    Each call builds a fresh app from *config*, or from the current global
-    config when *config* is None.  Reading the config once into ``cfg`` and
-    using it for *every* read is what makes a SIGHUP reload effective:
-    ``ConfigReloadableApp.reload()`` swaps in a freshly loaded config and then
-    rebuilds the app, so CORS, rate limiting, auth and static mounts all change
-    with it.  Idempotent.
+    Each call builds a fresh app from the provided config.  When *config* is
+    None the current config is read from the global registry via ``get()`` —
+    that is what :meth:`ConfigReloadableApp.reload` relies on to build an app
+    from freshly reloaded config, so *every* config value (CORS, rate limits,
+    auth, static files) is re-read on every build.  Idempotent.
 
     Raises:
         RuntimeError: if *config* is None and no config has been loaded yet.
@@ -55,34 +101,15 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         logger.warning("Backend error on %s: %s", request.url.path, exc.message)
         return JSONResponse(status_code=502, content=make_error_response(exc.message, "backend_error", exc.status_code))
 
-    # ── Middleware (outermost → innermost) ────────────────────────────────
-
-    from .middleware.body_size import BodySizeMiddleware
-    app.add_middleware(BodySizeMiddleware)
-
-    cors_cfg = cfg.cors
-    if cors_cfg.enabled:
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=cors_cfg.allow_origins,
-            allow_methods=cors_cfg.allow_methods,
-            allow_headers=cors_cfg.allow_headers,
-        )
-
-    from .middleware.request_id import RequestIDMiddleware
-    app.add_middleware(RequestIDMiddleware)
+    # ── Middleware ────────────────────────────────────────────────────────
+    # Registered innermost-first; see _middleware_stack() for the order and
+    # the reasoning behind it.
 
     from proxy.metrics import get_metrics_store
     metrics = get_metrics_store()
-    from .middleware.access_log import AccessLogMiddleware
-    app.add_middleware(AccessLogMiddleware, metrics=metrics)
 
-    from .middleware.rate_limit import RateLimitMiddleware
-    rate_cfg = cfg.rate_limit
-    app.add_middleware(RateLimitMiddleware, config=rate_cfg, metrics=metrics)
-
-    from .middleware.auth import AuthMiddleware
-    app.add_middleware(AuthMiddleware)
+    for cls, kwargs in reversed(_middleware_stack(cfg, metrics)):
+        app.add_middleware(cls, **kwargs)
 
     # ── Routes ────────────────────────────────────────────────────────────
 

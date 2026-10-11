@@ -374,6 +374,41 @@ static_files:
 
 
 @pytest.fixture
+def proxy_factory(proxy_config_dir):
+    """Start throwaway proxies from config text, for config-specific tests.
+
+    The template's ``{port}`` placeholder becomes the chosen free port and any
+    other ``{name}`` placeholder is replaced from *vars*::
+
+        proc, base = proxy_factory(CONFIG, backend_url=backend_url)
+
+    Every proxy started through the factory is terminated at teardown.
+    """
+    procs: list[subprocess.Popen] = []
+
+    def _start(config_text: str, name: str | None = None, **vars_):
+        port = find_free_port()
+        text = config_text
+        for key, value in {"port": port, **vars_}.items():
+            text = text.replace("{" + key + "}", str(value))
+        path = proxy_config_dir / (name or f"throwaway-{port}.yaml")
+        path.write_text(text)
+        proc = _start_proxy(port, path)
+        procs.append(proc)
+        return proc, f"http://127.0.0.1:{port}"
+
+    yield _start
+
+    for proc in procs:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+
+
+@pytest.fixture
 def restore_config():
     """Restore the global config registry after an in-process test.
 

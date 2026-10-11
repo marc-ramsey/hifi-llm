@@ -46,7 +46,7 @@ Key goals
 | FR‑02 | **Config‑driven backend list** | All backends are defined in `proxy-config.yaml`. |
 | FR‑03 | **Per‑model default parameters** | Each entry in `models[]` may share a `url` with other entries; the **only identifier** that distinguishes them is the `name`. The proxy must apply the entry‑specific `default_params` to every request that references that `name`. |
 | FR‑04 | **Multiple instances of the same checkpoint** | Interpreted as *multiple logical versions* of the same physical checkpoint, **all using the same backend URL**. The config must allow duplicate URLs. |
-| FR‑05 | **API‑key authentication (optional)** | If `auth.api_key` is set, all requests must include `Authorization: Bearer <key>`. Supports a single global key or a per‑model map. |
+| FR‑05 | **API‑key authentication (optional)** | If `auth.api_key` is set, all requests must include `Authorization: Bearer <key>`. Supports a single global key or a per‑model map. Two documented exceptions: `/health` is always reachable without credentials (monitors cannot hold a token), and in per‑model mode requests that carry no model — `GET /v1/models`, for example — match the `"*"` map entry, so omitting `"*"` denies them. |
 | FR‑06 | **Hot reload** | Receiving `SIGHUP` causes the proxy to reload `proxy-config.yaml` without dropping existing connections. |
 
 | FR‑11 | **Graceful shutdown** | On `SIGTERM`/`SIGINT` stop accepting new connections, finish in‑flight requests, then exit. |
@@ -136,7 +136,8 @@ models:
 |-------|------|
 | `listen.host` | Must be a valid IPv4/IPv6 address or `0.0.0.0`. |
 | `listen.port` | Integer 1‑65535, not in use at startup. |
-| `auth.api_key` | If set, all requests require `Authorization: Bearer <api_key>`. Accepts a single string (global key) or a dict mapping model names to keys (per‑model auth). Set to `null` to disable. |
+| `auth.api_key` | If set, all requests require `Authorization: Bearer <api_key>`. Accepts a single string (global key) or a dict mapping model names to keys (per‑model auth). In dict mode the reserved key `"*"` authorizes requests that carry no model. Set to `null` to disable. `/health` is exempt. |
+| `max_body_size_mb` | Maximum request body size, in megabytes (default `10`). Larger bodies are answered with `413`. Enforced while reading, so `Content-Length` is not required to honor it. |
 | `models[].name` | **Must be globally unique** (used as the OpenAI‑compatible `model` identifier). |
 | `models[].backend` | Must correspond to a known adapter module (`llama_cpp`, `vllm`, `openai`, …). |
 | `models[].url` | Valid URL with scheme `http` or `https`. **May appear multiple times** – duplicate URLs are allowed. |

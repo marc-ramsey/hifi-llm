@@ -55,6 +55,8 @@ rate_limit:           # per-IP sliding window rate limiting (disabled by default
     "/v1/chat/completions": 30
     "/v1/embeddings": 20
 
+max_body_size_mb: 10  # request bodies larger than this get HTTP 413
+
 models:
   - name: "fast-agent"
     url: "http://backend:8080"
@@ -99,6 +101,10 @@ Environment variable expansion: use `${VAR_NAME}` in config string values and th
 
 Health check. Returns `{"status": "ok", "config_loaded": true}`.
 
+Never requires credentials, even when `auth.api_key` is set — uptime monitors
+and process managers cannot hold a token. Everything else, `/metrics` included,
+is still gated.
+
 ### `GET /v1/models`
 
 Lists configured models in OpenAI format.
@@ -124,6 +130,44 @@ Authorization: Bearer <your-key>
 ```
 
 Set `auth.api_key: null` (or omit) to disable auth.
+
+It can also be a map of model name → key to gate each model with its own token:
+
+```yaml
+auth:
+  api_key:
+    fast-agent: "key-a"
+    slow-thinker: "key-b"
+```
+
+Requests that carry no model — `GET /v1/models`, for instance — are checked
+against a `"*"` entry. Add one to allow those requests, leave it out to reject
+them:
+
+```yaml
+auth:
+  api_key:
+    "*": "key-readonly"
+    fast-agent: "key-a"
+```
+
+## Limits
+
+`max_body_size_mb` (default 10) caps request bodies; anything larger is
+answered with `413` and an OpenAI-style error body. The cap is enforced while
+the body is being read, so a chunked upload with no `Content-Length` cannot
+slip past it, and nothing is buffered beyond the cap on the way.
+
+Requests pass through the middleware stack in this order:
+
+```
+request-id → access log → body size → CORS → rate limit → auth → route
+```
+
+which is what makes the protections work as advertised: oversized bodies are
+rejected before credentials are examined, browser preflights are answered
+without an `Authorization` header, and guessed credentials are throttled
+instead of being replayed against the backend forever.
 
 ## Backend auth
 
