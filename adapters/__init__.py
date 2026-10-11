@@ -54,9 +54,11 @@ def get_adapter(
         return OpenAICompatibleAdapter(api_key=api_key)
 
     # Adapters that need model config declare accepts_model_config = True.
+    # Contract: such adapters accept (model_config=..., api_key=...). api_key
+    # is still passed through so backend auth is never lost on that path.
     if getattr(cls, "accepts_model_config", False):
         if model_config is not None:
-            return cls(model_config=model_config)
+            return cls(model_config=model_config, api_key=api_key)
         logger.warning(
             "Adapter '%s' requires model_config but none was provided; "
             "falling back to OpenAICompatibleAdapter",

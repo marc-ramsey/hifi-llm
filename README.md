@@ -115,7 +115,7 @@ Legacy completions endpoint (forward to backends that support it).
 
 Forward to the appropriate backend.
 
-## Auth
+## Frontend auth
 
 When `auth.api_key` is set, every request must include:
 
@@ -124,6 +124,13 @@ Authorization: Bearer <your-key>
 ```
 
 Set `auth.api_key: null` (or omit) to disable auth.
+
+## Backend auth
+
+A model's `api_key` is the *upstream* credential — unrelated to `auth.api_key`
+above — and is sent to that model's backend as `Authorization: Bearer <api_key>`
+on every request (also for `managed_llama`, whose key goes to the proxied
+`llama-server`). Omit it and no `Authorization` header is sent.
 
 ## Hot Reload
 

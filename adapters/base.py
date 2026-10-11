@@ -57,9 +57,16 @@ class BaseAdapter(abc.ABC):
     def _build_headers(self, api_key: str | None) -> dict[str, str]:
         """Build HTTP headers for the backend request.
 
-        Override in subclasses to add custom headers (e.g. provider hints).
+        Adds ``Authorization: Bearer <api_key>`` when a key is configured
+        (per-request key, else the model's ``api_key`` from config).
+
+        Override in subclasses to add custom headers (e.g. provider hints) —
+        call ``super()._build_headers(api_key)`` to keep the auth header.
         """
-        return {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        return headers
 
     def _normalise_response(self, data: dict[str, Any]) -> dict[str, Any]:
         """Normalise the backend response to OpenAI-compatible shape.
@@ -142,9 +149,13 @@ class OpenAICompatibleAdapter(BaseAdapter):
         return _HTTP_CLIENT if verify_ssl else _SSL_UNVERIFIED_CLIENT
 
     def _build_request_headers(self, api_key: str | None) -> dict[str, str]:
-        """Build request headers including Content-Type and any custom headers."""
-        headers = self._build_headers(api_key)
-        headers["Content-Type"] = "application/json"
+        """Resolve the backend key and build the final request headers.
+
+        *api_key* (per-request) overrides the adapter-level key; Content-Type
+        is always present even if a subclass override forgets it.
+        """
+        headers = self._build_headers(api_key or self._api_key)
+        headers.setdefault("Content-Type", "application/json")
         return headers
 
     def _handle_error_response(self, resp: httpx.Response) -> str:
@@ -168,8 +179,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
         verify_ssl: bool = True,
     ) -> AsyncIterator[bytes]:
         """Stream response bytes transparently. Never raises."""
-        key = api_key or self._api_key
-        headers = self._build_request_headers(key)
+        headers = self._build_request_headers(api_key)
         client = self._get_client(verify_ssl)
 
         try:
@@ -203,8 +213,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
         verify_ssl: bool = True,
     ) -> dict[str, Any]:
         """Return the full JSON response."""
-        key = api_key or self._api_key
-        headers = self._build_request_headers(key)
+        headers = self._build_request_headers(api_key)
         client = self._get_client(verify_ssl)
 
         resp = await client.post(

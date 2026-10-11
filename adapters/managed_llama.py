@@ -37,9 +37,16 @@ class ManagedLlamaAdapter(BaseAdapter):
     PROVIDER = "llama.cpp"
     accepts_model_config = True
 
-    def __init__(self, model_config: ModelConfig) -> None:
+    def __init__(self, model_config: ModelConfig, api_key: str | None = None) -> None:
+        """Args:
+            model_config: the model entry (binary, server_config, url, ...).
+            api_key: backend auth token, overriding ``model_config.api_key``.
+                Forwarded to the llama.cpp delegate so it is sent as
+                ``Authorization: Bearer <key>`` on every backend request.
+        """
         self._model_config = model_config
-        self._delegate = LlamaCppAdapter()
+        self._api_key = api_key if api_key is not None else model_config.api_key
+        self._delegate = LlamaCppAdapter(api_key=self._api_key)
 
     # ── command building ────────────────────────────────────────────────
 
