@@ -178,23 +178,32 @@ class _BackendHandler(BaseHTTPRequestHandler):
         pass
 
 
-def _start_proxy(port: int, config_path: Path, cwd: Path = ROOT) -> subprocess.Popen:
+def _start_proxy(port: int, config_path: Path, cwd: Path = ROOT,
+                 env_extra: dict[str, str] | None = None,
+                 log_path: str | None = None) -> subprocess.Popen:
     """Start the hifi proxy as a subprocess and wait for it to be ready.
+
+    *env_extra* overrides the environment (e.g. ``LLM_PROXY_TIMEOUT_MS``) for
+    tests that need a specific timeout policy.
 
     Returns the ``Popen`` instance.  On failure the process is killed and
     ``pytest.fail`` is called with stdout so the error is visible in test output.
     """
     env = os.environ.copy()
-    env["LLM_PROXY_TIMEOUT_MS"] = "60000"
+    env.setdefault("LLM_PROXY_TIMEOUT_MS", "60000")
+    env.update(env_extra or {})
 
     venv_python = cwd / ".venv" / "bin" / "python3"
     python_bin = str(venv_python) if venv_python.exists() else sys.executable
+
+    # log_path keeps the proxy's stdout around for post-mortem debugging.
+    log_file = open(log_path, "w") if log_path else subprocess.PIPE
 
     proc = subprocess.Popen(
         [python_bin, str(cwd / "main.py"), "--config", str(config_path)],
         cwd=str(cwd),
         env=env,
-        stdout=subprocess.PIPE,
+        stdout=log_file,
         stderr=subprocess.STDOUT,
         text=True,
     )
@@ -212,8 +221,11 @@ def _start_proxy(port: int, config_path: Path, cwd: Path = ROOT) -> subprocess.P
 
     if not ready:
         proc.kill()
-        stdout, _ = proc.communicate(timeout=5)
-        pytest.fail(f"Proxy failed to start.\nstdout:\n{stdout}")
+        if log_path:
+            detail = Path(log_path).read_text()
+        else:
+            detail, _ = proc.communicate(timeout=5)
+        pytest.fail(f"Proxy failed to start.\nstdout:\n{detail}")
 
     return proc
 
@@ -386,14 +398,14 @@ def proxy_factory(proxy_config_dir):
     """
     procs: list[subprocess.Popen] = []
 
-    def _start(config_text: str, name: str | None = None, **vars_):
+    def _start(config_text: str, name: str | None = None, env: dict[str, str] | None = None, **vars_):
         port = find_free_port()
         text = config_text
         for key, value in {"port": port, **vars_}.items():
             text = text.replace("{" + key + "}", str(value))
         path = proxy_config_dir / (name or f"throwaway-{port}.yaml")
         path.write_text(text)
-        proc = _start_proxy(port, path)
+        proc = _start_proxy(port, path, env_extra=env)
         procs.append(proc)
         return proc, f"http://127.0.0.1:{port}"
 
