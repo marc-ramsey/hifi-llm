@@ -2,8 +2,15 @@
 
 The router is a dumb pipe: resolve the model, merge defaults, forward to the
 adapter.  Streaming responses are passed through byte-for-byte — no JSON
-parsing, no delta inspection.  The adapter guarantees that its generator
-never raises; errors are yielded as SSE error chunks instead.
+parsing, no delta inspection, no invented frames.
+
+Streaming error contract: the first upstream chunk is awaited *before* the
+response is opened, so a backend that fails immediately still produces a real
+status code instead of ``200 OK`` followed by a made-up ``data: {"error": …}``
+event.  Once bytes are on the wire the status line is spent; the stream then
+simply ends, exactly as the backend left it.  (A tool-calling client cannot
+tell an injected error frame from an empty answer — it just never runs the
+tool and shows nothing.)
 """
 
 from __future__ import annotations
@@ -88,21 +95,30 @@ async def _forward_stream(model_config, request: Request, endpoint: str) -> Stre
     """Raw SSE pass-through proxy.
 
     The adapter's forward_stream yields raw bytes (already SSE-formatted).
-    We forward them unchanged — no parsing, no splitting.
-    Error handling is the adapter's responsibility — it never raises.
+    They are forwarded unchanged — no parsing, no splitting, no appended
+    frames.
+
+    The first chunk is pulled here, while the status line is still ours: a
+    BackendError raised before any byte propagates to FastAPI's handler and
+    becomes a real 5xx, the same way it does for non-streaming requests.
     """
     payload = request.state._request_body
     adapter = _make_adapter(model_config)
 
-    stream = adapter.forward_stream(
+    upstream = adapter.forward_stream(
         url=model_config.url,
         endpoint=endpoint,
         payload=payload,
         verify_ssl=model_config.verify_ssl,
     )
 
+    try:
+        first = await upstream.__anext__()
+    except StopAsyncIteration:  # backend produced an empty body
+        first = None
+
     return StreamingResponse(
-        stream,
+        _chain(first, upstream),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -110,6 +126,14 @@ async def _forward_stream(model_config, request: Request, endpoint: str) -> Stre
             "X-Accel-Buffering": "no",
         },
     )
+
+
+async def _chain(first: bytes | None, rest):
+    """Yield an already-read *first* chunk, then the remainder of *rest*."""
+    if first is not None:
+        yield first
+    async for chunk in rest:
+        yield chunk
 
 
 async def _forward_json(model_config, request: Request, endpoint: str) -> JSONResponse:

@@ -74,11 +74,15 @@ class ManagedLlamaAdapter(BaseAdapter):
         timeout_ms: int = 120000,
         verify_ssl: bool = True,
     ) -> AsyncIterator[bytes]:
-        """Ensure the server is running, then delegate to LlamaCppAdapter."""
+        """Ensure the server is running, then delegate to LlamaCppAdapter.
+
+        A failed launch happens before any byte is produced, so it raises:
+        the client gets a real 503 rather than a 200 SSE stream that merely
+        contains an error object.
+        """
         cmd = self._build_command()
         if not ProcessManager.ensure_running(self._model_config.name, cmd):
-            yield self._error_sse(503, "Managed llama-server is restarting — try again shortly")
-            return
+            raise BackendError(503, "Managed llama-server is restarting — try again shortly")
         async for chunk in self._delegate.forward_stream(
             url=url, endpoint=endpoint, payload=payload,
             api_key=api_key, timeout_ms=timeout_ms, verify_ssl=verify_ssl,
