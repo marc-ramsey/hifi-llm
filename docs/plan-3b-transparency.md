@@ -82,14 +82,42 @@ translating in the response.
 *Test:* backend sets `Retry-After`/`X-RateLimit-Remaining`/custom content-type
 → client receives them; a non-JSON (`text/plain`) body is forwarded verbatim.
 
-**B5 — Streaming: keep it raw, honest about errors.** *(small)*
+**B5 — Streaming: keep it raw, honest about errors.** *(done)*
 Keep byte passthrough. For an upstream error while streaming, forward the
 upstream status and body when the stream has not started; once bytes are on the
 wire, close the stream instead of injecting a synthetic frame.
 *Test:* upstream error before first byte → real status/body; error after first
 byte → stream ends without an invented `data:` frame.
 
-**B6 — Move the hot path off `BaseHTTPMiddleware`.** *(largest, do last)*
+Shipped: `forward_stream` now raises `BackendError(status, message, body,
+headers)` instead of yielding `_error_sse(...)`, and `router._forward_stream`
+applies the same trick it already used for compression sniffing — await the
+first upstream chunk *before* constructing `StreamingResponse`, so a failure
+with nothing on the wire still reaches the `BackendError` handler and produces
+a real `502` (`error.code` = the backend's status, message extracted from the
+backend body). Mid-stream failure logs and ends the stream; `_error_sse` is
+deleted, so there is no code path left that can author an SSE frame.
+
+**B7 — Split stream timeouts from request timeouts.** *(done, not in the
+original list — found while investigating tool calls that never fired)*
+One `httpx.Timeout(120.0)` was applied to streams as well as buffered calls, so
+any stream with a >120 s total life, or a >120 s gap between chunks, was killed
+mid-flight by the proxy. A thinking model emitting a tool call after a long
+reasoning phase loses the call: the client sees a truncated turn, not an error.
+`stream_timeout()` now bounds only connect/pool/write and leaves read
+unbounded (`LLM_PROXY_STREAM_READ_TIMEOUT_MS=0`); `json_timeout()` keeps the
+overall budget for buffered calls. Clients stuck on a dead backend are covered
+by health probing plus connect/pool timeouts, not by cutting live streams.
+*Test:* `test_long_silence_between_chunks_is_not_a_timeout` runs a proxy with
+`LLM_PROXY_TIMEOUT_MS=800` against a backend that pauses 2 s mid-stream.
+
+**B6 — Move the hot path off `BaseHTTPMiddleware`.** *(largest, do last —
+performance only)* Correctness of client cancellation is *not* at issue:
+measured with `test_client_disconnect_reaches_the_backend` (client aborts
+mid-stream, raw-socket tap confirms the upstream sees the disconnect), current
+Starlette does propagate the cancellation through the middleware stack, so an
+abandoned stream does not wedge a llama.cpp slot. B6 stays open for per-chunk
+overhead only, and that test is the guard that the rewrite must not regress it.
 Port `RequestID`, `AccessLog`, `RateLimit` and `Auth` to pure ASGI (or drop them
 onto the router as dependencies). `Auth`'s body sniff becomes a shared
 `raw_body` helper so the body is parsed exactly once per request.
@@ -98,6 +126,21 @@ propagation test — client aborts mid-stream, upstream request is cancelled;
 `#3a`'s middleware-order and 413 tests keep passing unchanged.
 
 ## Rollout
+
+0. **Harness first** *(done)* — `tests/test_streaming_fidelity.py` pins the
+   contract with an adversarial raw-TCP backend: events split across writes and
+   split inside a UTF-8 codepoint, two events in one segment, `:` comment
+   keep-alives, tool-call deltas reassembled by a consumer, backend failure
+   before/after first byte, mid-stream RST, long silences, client disconnect.
+   `tools/difftap.py` answers the same questions about *production* traffic:
+   tap the client arm and the proxy arm, then `compare` reports whether the
+   request bytes, the response bytes, or only the timings differ.
+   Measured on a tool-call stream (client→tap→model vs client→proxy→tap→model):
+   response bytes identical (775 B, 8 SSE events); request bytes differ only
+   because httpx re-serialises with compact separators (133 B → 121 B, same
+   parsed payload). `json=` also escapes non-ASCII, so CJK/tool JSON is sent as
+   `\uXXXX` — semantically equivalent, ~6× the bytes. That is B1's real cost
+   today: nothing observed breaking, everything slightly rewritten upstream.
 
 1. B1 + B2 + B3 + B4 in one PR behind the same release, since together they are
    the "transparent" contract change; B5 alongside.

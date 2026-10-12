@@ -6,7 +6,7 @@ A lightweight, OpenAI-compatible reverse proxy that routes requests across multi
 
 - **Single OpenAI-compatible API** — `/v1/*` endpoints (`/v1/models`, `/v1/chat/completions`, `/v1/embeddings`)
 - **Multi-backend routing** — map model names to different backends by URL
-- **Transparent SSE streaming** — raw SSE pass-through for streaming responses, with reasoning-content normalization for Open WebUI compatibility
+- **Transparent SSE streaming** — raw byte pass-through, in both directions; the proxy never parses or rewrites a stream
 - **Single global API key** auth — optional Bearer token guard
 - **Hot-reload config** — `SIGHUP` triggers reload without dropping connections
 - **Static file serving** — serve files from filesystem directories at configured URL paths
@@ -168,6 +168,45 @@ which is what makes the protections work as advertised: oversized bodies are
 rejected before credentials are examined, browser preflights are answered
 without an `Authorization` header, and guessed credentials are throttled
 instead of being replayed against the backend forever.
+
+## Streaming
+
+The response stream is forwarded byte for byte. The proxy parses nothing: no
+delta rewriting, no injected frames, no `[DONE]` of its own. (An earlier build
+rewrote `delta` objects to normalize reasoning content; that silently dropped
+`delta.tool_calls`, which is why tool calls "broke" whenever this code was
+touched. It is gone, and `tests/test_streaming_fidelity.py` keeps it gone.)
+
+**Errors.** A backend failure before the first byte is reported as a real HTTP
+status — `502` with the backend's own status in `error.code` — never as a
+`200 OK` `text/event-stream` carrying a made-up error event, because a
+tool-calling client reads that as an empty answer and skips the tool call.
+Once bytes are on the wire the stream simply ends; nothing is appended.
+
+**Timeouts.** The non-streaming request budget does not apply to streams:
+
+| Variable | Default | Applies to |
+|---|---|---|
+| `LLM_PROXY_TIMEOUT_MS` | 120000 | non-streaming requests, overall |
+| `LLM_PROXY_CONNECT_TIMEOUT_MS` | 5000 | connecting to a backend |
+| `LLM_PROXY_POOL_TIMEOUT_MS` | 30000 | waiting for a free connection |
+| `LLM_PROXY_STREAM_READ_TIMEOUT_MS` | 0 (no limit) | gap between streamed chunks |
+| `LLM_PROXY_MAX_CONNECTIONS` / `..._MAX_KEEPALIVE_CONNECTIONS` | 100 / 20 | upstream pool |
+
+A stream is therefore never cut for thinking too long — a reasoning model can
+be silent for minutes. Set `LLM_PROXY_STREAM_READ_TIMEOUT_MS` to a positive
+value to opt back in to a stall ceiling, and note that connect/pool timeouts
+still apply before the stream starts.
+
+To compare this proxy against a direct connection, `tools/difftap.py` taps both
+arms and reports whether differences are content or timing:
+
+```bash
+tools/difftap.py serve --listen 127.0.0.1:8099 --upstream 127.0.0.1:8082 \
+    --log /tmp/tap-direct.jsonl --capture-bodies
+tools/difftap.py compare /tmp/tap-direct.jsonl /tmp/tap-hifi.jsonl \
+    --path chat/completions
+```
 
 ## Backend auth
 
