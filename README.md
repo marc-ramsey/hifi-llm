@@ -63,7 +63,7 @@ models:
     provider: llama.cpp          # display hint for frontends like OWUI
     backend: openai_compatible   # adapter type: "llama_cpp", "managed_llama", or any registered
     api_key: null                # optional per-model backend auth token (${VAR} expanded)
-    default_params:
+    default_params:              # used when the request omits them; client wins
       temperature: 0.7
       top_p: 0.95
     verify_ssl: true             # set false for self-signed backend certs
@@ -83,6 +83,7 @@ models:
       ctx_size: 4096
       n_gpu_layers: 99
       threads: 8
+    server_args: ["--parallel", "2"]   # raw args appended to the command line
 
 # ── Static file serving ─────────────────────────────────────────────
 static_files:
@@ -120,6 +121,53 @@ Legacy completions endpoint (forward to backends that support it).
 ### `POST /v1/embeddings`
 
 Forward to the appropriate backend.
+
+## Per-model defaults
+
+`default_params` supplies request parameters the client did not send — the
+mechanism that makes two model entries pointing at the same backend behave
+differently, which is the only way `work/x` and `think/x` can differ at all:
+
+```yaml
+models:
+  - name: "work/Qwen3.6-35B"
+    url: "http://localhost:8082"
+    default_params: {temperature: 0.3, top_p: 0.8}
+
+  - name: "think/Qwen3.6-35B"
+    url: "http://localhost:8082"
+    default_params: {temperature: 1.0, top_p: 0.95, thinking: {type: enabled}}
+```
+
+Precedence and the two edges worth knowing:
+
+| Client sent | Result |
+|---|---|
+| nothing, or `"temperature": null` | default applies — `null` means "no preference" |
+| `"temperature": 0.1` | `0.1`; the config value is ignored |
+| `"logit_bias": {"7": 3.0}` | merged key by key, client entries win |
+| `"logit_bias": {}` | stays empty — an empty dict is an opt-out, not an omission |
+
+**Every injected parameter is announced**, because a default that applies
+silently is an afternoon of diffing byte counts to find out why sampling looks
+nothing like the config:
+
+- response header `X-Hifi-Defaulted: top_p,max_tokens,logit_bias.42` — absent
+  when nothing was added; nested additions are named by path
+- `proxy_default_params_total{model="…",param="…"}` on `/metrics`
+- one `DEBUG` log line per request
+
+Launch arguments are not request parameters: they belong in `server_args`
+(append-only, verbatim) or `server_config` (snake_case → `--kebab-case`).
+`default_params.server_args` used to work and is migrated with a warning, since
+now that defaults are genuinely applied it would otherwise put a CLI flag inside
+every request body.
+
+> This knob shipped broken: the merge was computed and discarded, so the config
+> did nothing while two passing tests named after it asserted only that the
+> proxy returned `200`. Deleting the merge left the suite green. `default_params`
+> is now applied upstream of both the streaming and JSON paths, and the tests
+> assert on the body the backend received (`tests/test_default_params.py`).
 
 ## Frontend auth
 

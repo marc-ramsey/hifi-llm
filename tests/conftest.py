@@ -72,9 +72,18 @@ def parse_sse_chunks(raw_text: str):
 class _BackendHandler(BaseHTTPRequestHandler):
     """Minimal OpenAI-compatible backend that returns deterministic responses."""
 
+    # Upstream oracle: every body the proxy forwarded, in order.
+    #
+    # The suite used to assert only on what the proxy returned, and a working
+    # pipe always returns something — so `default_params` shipped as a silent
+    # no-op behind two green tests that claimed to cover it.  Anything about
+    # *what the proxy sends* needs to be observable here.
+    forwarded: list[dict] = []
+
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length)) if length else {}
+        type(self).forwarded.append({"path": self.path, "body": body})
 
         if "/chat/completions" in self.path:
             self._handle_chat(body)
@@ -331,6 +340,25 @@ def client(proxy):
     s.get = lambda path, **kw: _request("GET", path, **kw)
     s.post = lambda path, **kw: _request("POST", path, **kw)
     return s
+
+
+@pytest.fixture
+def forwarded():
+    """The upstream oracle: what the proxy actually sent, not what it returned.
+
+    Gives a callable returning ``[{"path": …, "body": …}, …]`` recorded since
+    the fixture ran, with ``.clear()`` to restart recording.  Use it for any
+    claim about forwarding: the proxy always answers *something*, so asserting
+    on the response alone cannot detect a body that was mangled, defaulted, or
+    dropped on the way out.
+    """
+    _BackendHandler.forwarded.clear()
+
+    def _got() -> list[dict]:
+        return list(_BackendHandler.forwarded)
+
+    _got.clear = lambda: _BackendHandler.forwarded.clear()
+    return _got
 
 
 @pytest.fixture(scope="session")

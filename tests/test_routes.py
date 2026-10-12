@@ -76,18 +76,27 @@ class TestChatCompletions:
         assert resp.status_code == 200
         _is_openai_chat_completion(resp.json())
 
-    def test_default_params_merged(self, client):
-        """default_params (temperature=0.7) should be merged into the request."""
+    def test_default_params_merged(self, client, forwarded):
+        """Params the client omits come from the model's ``default_params``.
+
+        Asserted on the body the backend received.  This test used to assert
+        ``status == 200`` and "one choice" while claiming to verify the merge —
+        and it passed for months with ``default_params`` discarded on the floor.
+        """
         resp = client.post("/v1/chat/completions", json={
             "model": "gemma-4-26B-instruct",
             "messages": [{"role": "user", "content": "count 1 to 2"}],
             "max_tokens": 10,
         })
         assert resp.status_code == 200
-        data = resp.json()
-        assert data["object"] == "chat.completion"
-        # Verify the response is valid — backend received the merged params
-        assert len(data["choices"]) == 1
+        assert resp.json()["object"] == "chat.completion"
+
+        sent = forwarded()[-1]["body"]
+        assert sent["temperature"] == 0.7, "configured default never applied"
+        assert sent["top_p"] == 0.95
+        assert sent["max_tokens"] == 10, "default must not overwrite a client value"
+        # And the proxy says what it supplied, on the response.
+        assert resp.headers["X-Hifi-Defaulted"] == "temperature,top_p"
 
     def test_invalid_model(self, client):
         resp = client.post("/v1/chat/completions", json={
@@ -99,8 +108,8 @@ class TestChatCompletions:
         assert data["detail"]["type"] == "invalid_request_error"
         assert "this-model-does-not-exist" in data["detail"]["message"]
 
-    def test_client_params_override_defaults(self, client):
-        """client temperature=0.1 should override default_params temperature=0.7."""
+    def test_client_params_override_defaults(self, client, forwarded):
+        """A client value is left alone, and is not reported as defaulted."""
         resp = client.post("/v1/chat/completions", json={
             "model": "gemma-4-26B-instruct",
             "messages": [{"role": "user", "content": "count to 3"}],
@@ -108,6 +117,14 @@ class TestChatCompletions:
             "temperature": 0.1,
         })
         assert resp.status_code == 200
+
+        sent = forwarded()[-1]["body"]
+        assert sent["temperature"] == 0.1
+        defaulted = set((resp.headers.get("X-Hifi-Defaulted") or "").split(",")) - {""}
+        assert defaulted == {"top_p"}, (
+            "temperature was supplied by the client, so it must not be reported "
+            f"as a default; got {defaulted}"
+        )
 
 
 class TestChatCompletionsStreaming:

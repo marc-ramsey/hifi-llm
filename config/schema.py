@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+logger = logging.getLogger(__name__)
 
 
 class ListenConfig(BaseModel):
@@ -48,7 +51,17 @@ class ModelConfig(BaseModel):
                   (e.g. "llama.cpp"). Does NOT affect routing — use `backend`
                   for that.
         api_key: Optional per-model backend auth token (${VAR} expanded).
-        default_params: Default sampling parameters merged into each request.
+        default_params: Parameters the proxy supplies when the request omits
+                 them, applied to every request naming this model.  A value the
+                 client sends always wins — including an explicit ``null``,
+                 which means "no value chosen" and is also replaced.  Nested
+                 dicts are merged key by key.  Every key the proxy adds is
+                 reported in the ``X-Hifi-Defaulted`` response header and
+                 counted in ``proxy_default_params_total``, so a default can
+                 never take effect invisibly.
+        server_args: Extra raw arguments appended to the ``llama-server``
+                 command line for ``backend: managed_llama``.  Process
+                 configuration, never part of a request body.
         verify_ssl: Whether to verify the backend's TLS certificate
                     (default True; set False for self-signed certs).
         llama_binary: Path or name of the llama-server binary. Required when
@@ -63,9 +76,39 @@ class ModelConfig(BaseModel):
     provider: str | None = None  # OWUI provider hint (e.g. "llama.cpp")
     api_key: str | None = None  # per-model backend auth token (${VAR} expanded)
     default_params: dict[str, Any] = Field(default_factory=dict)
+    server_args: list[str] = Field(default_factory=list)  # raw llama-server args
     verify_ssl: bool = True  # TLS certificate verification
     llama_binary: str | None = None  # path to llama-server binary
     server_config: dict[str, Any] = Field(default_factory=dict)  # mapped to CLI flags
+
+    @model_validator(mode="after")
+    def _promote_legacy_server_args(self) -> "ModelConfig":
+        """Move ``default_params.server_args`` to its own field.
+
+        It used to be possible to hide launch arguments in ``default_params``,
+        which the adapter read out before building the command line.  Now that
+        ``default_params`` is genuinely applied to requests, that key would
+        also be forwarded to the HTTP API on every call — a process flag
+        leaking into request bodies.  Promote it and keep working.
+        """
+        if "server_args" in self.default_params:
+            legacy = self.default_params.pop("server_args")
+            if isinstance(legacy, str):
+                legacy = [legacy]
+            if not isinstance(legacy, list):
+                raise ValueError(
+                    f"model {self.name!r}: default_params.server_args must be a "
+                    f"list of strings, got {type(legacy).__name__}; use the "
+                    f"top-level server_args field instead"
+                )
+            logger.warning(
+                "model %r: default_params.server_args is deprecated; moved to "
+                "server_args=%s (launch arguments are never sent to the backend)",
+                self.name,
+                legacy,
+            )
+            self.server_args = [*self.server_args, *[str(a) for a in legacy]]
+        return self
 
     @field_validator("url")
     @classmethod

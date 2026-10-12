@@ -52,6 +52,10 @@ class MetricsStore:
         self._durations: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=self._max_durations))
         # ip -> rate-limit hit count
         self._rate_limit_counts: dict[str, int] = defaultdict(int)
+        # (model, parameter) -> times the proxy supplied that parameter instead
+        # of receiving it.  Per-parameter, not one total: "which knob is this
+        # firing on, and how often" is the question actually asked at 2am.
+        self._default_param_counts: dict[tuple[str, str], int] = defaultdict(int)
         # Track total requests for cleanup
         self._total_requests = 0
 
@@ -65,6 +69,10 @@ class MetricsStore:
     def record_rate_limit(self, ip: str) -> None:
         """Record a rate-limit hit."""
         self._rate_limit_counts[ip] += 1
+
+    def record_default_param(self, model: str, param: str) -> None:
+        """Record that ``default_params`` supplied *param* for *model*."""
+        self._default_param_counts[(model, param)] += 1
 
     def generate(self) -> str:
         """Return metrics in Prometheus exposition format."""
@@ -120,6 +128,18 @@ class MetricsStore:
         lines.append("# TYPE proxy_rate_limits_total counter")
         for ip, count in sorted(self._rate_limit_counts.items()):
             lines.append(f'proxy_rate_limits_total{{ip="{_esc(ip)}"}} {count}')
+
+        # -- proxy_default_params_total (counter) --
+        lines.append(
+            "# HELP proxy_default_params_total Times default_params supplied a "
+            "parameter the request omitted, by model and parameter."
+        )
+        lines.append("# TYPE proxy_default_params_total counter")
+        for (model, param), count in sorted(self._default_param_counts.items()):
+            lines.append(
+                f'proxy_default_params_total{{model="{_esc(model)}",'
+                f'param="{_esc(param)}"}} {count}'
+            )
 
         # -- proxy_requests_in_flight (gauge) -- placeholder
         lines.append("# HELP proxy_requests_in_flight Current in-flight requests.")

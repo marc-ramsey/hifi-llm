@@ -30,8 +30,9 @@ class ManagedLlamaAdapter(BaseAdapter):
     """Adapter for a locally-managed llama.cpp server process.
 
     The server is launched lazily on first request and auto-restarted on death.
-    ``server_config`` keys are mapped to llama-server CLI flags at launch time;
-    ``default_params`` flows through unchanged to the HTTP API.
+    ``server_config`` keys are mapped to llama-server CLI flags at launch time,
+    ``server_args`` is appended verbatim, and ``default_params`` is applied to
+    request bodies by the router before it reaches this adapter.
     """
 
     PROVIDER = "llama.cpp"
@@ -58,8 +59,12 @@ class ManagedLlamaAdapter(BaseAdapter):
         for key, value in self._model_config.server_config.items():
             cmd.extend([_to_cli_flag(key), str(value)])
 
-        # Any extra raw args the user wants to pass through
-        cmd.extend(self._model_config.default_params.get("server_args", []))
+        # Any extra raw args the user wants to pass through.  This lives in its
+        # own field rather than in ``default_params``, because default_params
+        # now really is applied to requests — a launch flag hidden there would
+        # otherwise show up in every request body.  (Old configs are migrated
+        # by ``ModelConfig._promote_legacy_server_args``.)
+        cmd.extend(self._model_config.server_args)
 
         return cmd
 
