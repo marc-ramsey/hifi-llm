@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 #                  killing it on a wall clock produced truncated tool calls.
 
 #: Overall budget for non-streaming requests.
+# NOTE: Evaluated at import time. Hot-reloading the config at runtime will
+# not update these values unless the module is reloaded.
 TIMEOUT = int(os.environ.get("LLM_PROXY_TIMEOUT_MS", "120000"))
 
 #: Time allowed to establish a TCP connection to a backend.
@@ -136,7 +138,11 @@ _CLIENTS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[bool, httpx
 
 
 def _get_http_client(verify_ssl: bool) -> httpx.AsyncClient:
-    """Return the shared client for *verify_ssl*, creating it on this loop."""
+    """Return the shared client for *verify_ssl*, creating it on this loop.
+
+    Must be called from an async context. Calling this synchronously will
+    raise ``RuntimeError: no running event loop``.
+    """
     loop = asyncio.get_running_loop()
     per_loop = _CLIENTS.get(loop)
     if per_loop is None:
