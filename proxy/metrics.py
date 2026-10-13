@@ -94,19 +94,21 @@ class MetricsStore:
             # Build buckets with standard le values
             buckets: dict[str, int] = defaultdict(int)
             for d in durations:
+                # Prometheus histogram buckets are cumulative; use independent `if`
+                # statements so each threshold counts all durations <= it.
                 if d <= 0.05:
                     buckets["0.05"] += 1
-                elif d <= 0.1:
+                if d <= 0.1:
                     buckets["0.1"] += 1
-                elif d <= 0.25:
+                if d <= 0.25:
                     buckets["0.25"] += 1
-                elif d <= 0.5:
+                if d <= 0.5:
                     buckets["0.5"] += 1
-                elif d <= 1.0:
+                if d <= 1.0:
                     buckets["1.0"] += 1
-                elif d <= 2.5:
+                if d <= 2.5:
                     buckets["2.5"] += 1
-                elif d <= 5.0:
+                if d <= 5.0:
                     buckets["5.0"] += 1
                 else:
                     buckets["+Inf"] += 1
@@ -141,7 +143,7 @@ class MetricsStore:
                 f'param="{_esc(param)}"}} {count}'
             )
 
-        # -- proxy_requests_in_flight (gauge) -- placeholder
+        # -- proxy_requests_in_flight (gauge) — placeholder
         lines.append("# HELP proxy_requests_in_flight Current in-flight requests.")
         lines.append("# TYPE proxy_requests_in_flight gauge")
         lines.append("proxy_requests_in_flight 0")
