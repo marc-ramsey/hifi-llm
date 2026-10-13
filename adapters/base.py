@@ -278,7 +278,9 @@ class OpenAICompatibleAdapter(BaseAdapter):
 
     def _handle_error_response(self, resp: httpx.Response) -> str:
         """Extract an error message from a non-2xx response."""
-        return error_message_from_body(resp.content or resp.read())
+        # resp.content is already read and cached by httpx for non-streaming responses.
+        # Avoid `or` which would call resp.read() on empty bytes.
+        return error_message_from_body(resp.content or b"")
 
     # ── streaming ───────────────────────────────────────────────────────
 

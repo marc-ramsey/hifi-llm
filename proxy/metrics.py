@@ -119,8 +119,8 @@ class MetricsStore:
                     buckets["2.5"] += 1
                 if d <= 5.0:
                     buckets["5.0"] += 1
-                else:
-                    buckets["+Inf"] += 1
+                # +Inf bucket must equal total count for cumulative histograms
+                buckets["+Inf"] = count
 
             lines.append(
                 f'proxy_request_duration_seconds_count{{path="{_esc(path)}"}} {count}'
