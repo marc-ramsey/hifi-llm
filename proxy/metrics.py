@@ -19,6 +19,7 @@ Metrics exposed::
 from __future__ import annotations
 
 import logging
+import threading
 from collections import defaultdict, deque
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ class MetricsStore:
     """
 
     def __init__(self) -> None:
+        self._lock = threading.Lock()  # Protects concurrent reads during scrapes
         # path + status -> count
         self._request_counts: dict[tuple[str, str], int] = defaultdict(int)
         # path -> ring buffer of recent durations (last N per path)
@@ -77,23 +79,30 @@ class MetricsStore:
     def generate(self) -> str:
         """Return metrics in Prometheus exposition format."""
         lines: list[str] = []
+        
+        # Snapshot state under lock to avoid RuntimeError during iteration
+        with self._lock:
+            request_counts = dict(self._request_counts)
+            durations = {k: list(v) for k, v in self._durations.items()}
+            rate_limit_counts = dict(self._rate_limit_counts)
+            default_param_counts = dict(self._default_param_counts)
 
         # -- proxy_requests_total (counter) --
         lines.append("# HELP proxy_requests_total Total HTTP requests by path and status.")
         lines.append("# TYPE proxy_requests_total counter")
-        for (path, status), count in sorted(self._request_counts.items()):
+        for (path, status), count in sorted(request_counts.items()):
             lines.append(f'proxy_requests_total{{path="{_esc(path)}",status="{status}"}} {count}')
 
         # -- proxy_request_duration_seconds (histogram) --
         lines.append("# HELP proxy_request_duration_seconds Request duration in seconds.")
         lines.append("# TYPE proxy_request_duration_seconds histogram")
 
-        for path, durations in sorted(self._durations.items()):
-            count = len(durations)
-            total_sum = sum(durations)
+        for path, dur_list in sorted(durations.items()):
+            count = len(dur_list)
+            total_sum = sum(dur_list)
             # Build buckets with standard le values
             buckets: dict[str, int] = defaultdict(int)
-            for d in durations:
+            for d in dur_list:
                 # Prometheus histogram buckets are cumulative; use independent `if`
                 # statements so each threshold counts all durations <= it.
                 if d <= 0.05:
@@ -128,7 +137,7 @@ class MetricsStore:
         # -- proxy_rate_limits_total (counter) --
         lines.append("# HELP proxy_rate_limits_total Total rate-limit hits by IP.")
         lines.append("# TYPE proxy_rate_limits_total counter")
-        for ip, count in sorted(self._rate_limit_counts.items()):
+        for ip, count in sorted(rate_limit_counts.items()):
             lines.append(f'proxy_rate_limits_total{{ip="{_esc(ip)}"}} {count}')
 
         # -- proxy_default_params_total (counter) --
@@ -137,7 +146,7 @@ class MetricsStore:
             "parameter the request omitted, by model and parameter."
         )
         lines.append("# TYPE proxy_default_params_total counter")
-        for (model, param), count in sorted(self._default_param_counts.items()):
+        for (model, param), count in sorted(default_param_counts.items()):
             lines.append(
                 f'proxy_default_params_total{{model="{_esc(model)}",'
                 f'param="{_esc(param)}"}} {count}'
@@ -158,6 +167,6 @@ def _esc(s: str) -> str:
 
 def _fmt(v: float) -> str:
     """Format a number for Prometheus (avoid scientific notation)."""
-    if v == int(v):
+    if v.is_integer():
         return f"{v:.1f}"
     return f"{v:.6g}"

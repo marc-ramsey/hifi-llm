@@ -133,7 +133,7 @@ class StaticFileConfig(BaseModel):
     This also means static_files can be added via SIGHUP hot-reload.
     """
     path: str = "/"
-    directories: list[str]  # validated at mount time, not at parse time
+    directories: list[str] = Field(default_factory=list)  # validated at mount time, not at parse time
 
 
 class ProxyConfig(BaseModel):
